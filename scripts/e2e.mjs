@@ -242,7 +242,10 @@ await step('marks follow a zoomed region capture', async () => {
   const p = await pixel(marked, 0.5, 0.3);
   const q = await pixel(clean, 0.5, 0.3);
   console.log(`       inside-ring pixel marked=${p} clean=${q}`);
-  assert.ok(p[0] > q[0] + 8 && p[2] > q[2] + 8, `fill tint expected inside the ring, got ${p} vs ${q}`);
+  // Magenta raises red/blue relative to green. Compare that colour shift rather than demanding
+  // an exact increase in each channel across two different live frames (sensor noise/JPEG).
+  const magenta = ([r, g, b]) => r + b - 2 * g;
+  assert.ok(magenta(p) > magenta(q) + 30, `fill tint expected inside the ring, got ${p} vs ${q}`);
 });
 
 await step('clear_annotations removes some, then all', async () => {
