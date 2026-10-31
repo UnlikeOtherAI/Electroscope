@@ -169,6 +169,8 @@ export class CameraSession extends EventTarget {
       }
       this.activeId = id;
       this.video.srcObject = this.stream;
+      this.readTrack();
+      this.changed();
       // Some UVC drivers return a stream but never deliver a first frame. In that case play()
       // also stays pending forever; keep camera switching and automatic recovery available.
       void this.video.play().catch(() => undefined);
