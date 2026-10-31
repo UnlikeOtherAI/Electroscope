@@ -167,18 +167,23 @@ export class CameraSession extends EventTarget {
           await new Promise((r) => setTimeout(r, 700));
         }
       }
+      this.activeId = id;
+      this.video.srcObject = this.stream;
+      this.readTrack();
+      this.changed();
+      // Some UVC drivers return a stream but never deliver a first frame. In that case play()
+      // also stays pending forever; keep camera switching and automatic recovery available.
+      void this.video.play().catch(() => undefined);
+      await waitForFrame(this.video);
     } catch (e) {
+      this.closeStream();
       this.activeId = null;
       this.busy = (e as DOMException).name === 'NotReadableError';
       this.error = describeError(e);
       this.changed();
       throw new Error(this.error);
     }
-    this.activeId = id;
     this.busy = false;
-    this.video.srcObject = this.stream;
-    await this.video.play().catch(() => undefined);
-    await waitForFrame(this.video);
     this.readTrack();
     this.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.activeId = null;
@@ -414,25 +419,31 @@ export class CameraSession extends EventTarget {
 
 function waitForFrame(video: HTMLVideoElement): Promise<void> {
   if (video.readyState >= 2 && video.videoWidth > 0) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const done = () => {
+      clearTimeout(timer);
       video.removeEventListener('loadeddata', done);
-      resolve();
+      if (video.readyState >= 2 && video.videoWidth > 0) resolve();
+      else reject(new DOMException('The camera did not deliver a video frame. Retrying automatically.', 'NotReadableError'));
     };
+    const timer = setTimeout(done, 5000);
     video.addEventListener('loadeddata', done);
-    setTimeout(done, 5000);
   });
 }
 
-export function describeError(e: unknown): string {
+export function describeError(
+  e: unknown,
+  platform = typeof window !== 'undefined' ? window.electroscope?.platform : undefined,
+): string {
   const err = e as DOMException;
   switch (err?.name) {
     case 'NotAllowedError':
+      if (platform === 'darwin') return 'Camera access is blocked. Open System Settings > Privacy & Security > Camera and allow Electroscope.';
       return 'Camera access is blocked. On Windows, open Settings > Privacy & security > Camera and allow desktop apps to use your camera.';
     case 'NotFoundError':
       return 'No camera found. Plug in your microscope and it will appear here.';
     case 'NotReadableError':
-      return 'Another app is using this camera (often the Windows Camera app, Teams or a browser tab). Close it and Electroscope will connect automatically.';
+      return 'The camera is unavailable. Close any other app using it; Electroscope will retry automatically.';
     case 'OverconstrainedError':
       return 'The camera does not support that resolution.';
     default:

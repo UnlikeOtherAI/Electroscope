@@ -58,6 +58,8 @@ npm run dist:win    # Windows installer and portable exe, in release/
 npm run dist:mac    # macOS dmg and zip, in release/ (run on a Mac)
 ```
 
+For a signed, notarized Mac package and physical-microscope verification, see [the macOS release guide](docs/macos-release.md).
+
 If the app says the camera is busy, another program has it. Close the Camera app, Teams, or a browser tab using the camera; Electroscope keeps retrying and connects as soon as it is free.
 
 ## Develop

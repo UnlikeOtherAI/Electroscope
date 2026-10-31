@@ -2,6 +2,7 @@
 //   node scripts/e2e.mjs           real camera
 //   node scripts/e2e.mjs --fake    Chromium's synthetic camera (CI)
 // ELECTROSCOPE_EXE=<path> tests a packaged build instead of the source tree.
+// ELECTROSCOPE_CAMERA=<label> selects a particular physical camera before testing.
 import { _electron as electron } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -52,6 +53,15 @@ process.on('uncaughtException', async (e) => {
 const page = await app.firstWindow();
 page.on('console', (m) => m.type() === 'error' && console.log('  [renderer error]', m.text()));
 await page.setViewportSize({ width: 1360, height: 860 }).catch(() => undefined);
+
+if (process.env.ELECTROSCOPE_CAMERA) {
+  const camera = process.env.ELECTROSCOPE_CAMERA;
+  await page.locator('#camera-list button').filter({ hasText: camera }).click();
+  await page.waitForFunction((label) => {
+    return document.getElementById('hud-cam')?.textContent.includes(label)
+      && document.getElementById('video')?.videoWidth > 0;
+  }, camera, { timeout: 30000 });
+}
 
 await step('window shows a live camera', async () => {
   await page.waitForFunction(() => document.getElementById('video')?.videoWidth > 0, null, { timeout: 30000 });
@@ -232,7 +242,10 @@ await step('marks follow a zoomed region capture', async () => {
   const p = await pixel(marked, 0.5, 0.3);
   const q = await pixel(clean, 0.5, 0.3);
   console.log(`       inside-ring pixel marked=${p} clean=${q}`);
-  assert.ok(p[0] > q[0] + 8 && p[2] > q[2] + 8, `fill tint expected inside the ring, got ${p} vs ${q}`);
+  // Magenta raises red/blue relative to green. Compare that colour shift rather than demanding
+  // an exact increase in each channel across two different live frames (sensor noise/JPEG).
+  const magenta = ([r, g, b]) => r + b - 2 * g;
+  assert.ok(magenta(p) > magenta(q) + 30, `fill tint expected inside the ring, got ${p} vs ${q}`);
 });
 
 await step('clear_annotations removes some, then all', async () => {
@@ -283,7 +296,7 @@ await step('the human can draw every mark type with a chosen colour, and the age
   assert.equal(await page.locator('#tb-clear-all').isDisabled(), false);
 
   // Ctrl+Z removes the last mark; the agent can restyle a human mark by id.
-  await page.keyboard.press('Control+z');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   assert.equal(json(await call('get_status')).annotations.length, 4);
   const restyled = json(await call('annotate', { annotations: [{ id: marks[0].id, type: 'circle', x: marks[0].x, y: marks[0].y, radius: marks[0].radius, color: 'red' }] }));
   assert.equal(restyled.annotations.find((m) => m.id === marks[0].id).color, 'red');
