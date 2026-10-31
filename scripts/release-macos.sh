@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ "$(uname -s)" == Darwin ]] || { echo 'Run this script on macOS.' >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo 'Commit source changes before releasing.' >&2; exit 1; }
+revision="$(git rev-parse HEAD)"
 
 identity='UnlikeOtherAI s.r.o. (23B7GTLBN7)'
 : "${APP_STORE_CONNECT_API_KEY_PATH:?Set the notarization API key path.}"
@@ -24,7 +25,9 @@ signature="$(codesign -dv --verbose=4 "$app" 2>&1)"
 grep -Fq "Authority=Developer ID Application: $identity" <<< "$signature"
 grep -Fq 'TeamIdentifier=23B7GTLBN7' <<< "$signature"
 
-revision="$(git rev-parse HEAD)"
+[[ "$(git rev-parse HEAD)" == "$revision" && -z "$(git status --porcelain)" ]] || {
+  echo 'Source changed during the build; rebuild from a clean revision.' >&2; exit 1;
+}
 version="$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version")"
 out="release/Electroscope-$version-mac-arm64-${revision:0:7}"
 [[ ! -e "$out.zip" ]] || { echo 'This release already exists.' >&2; exit 1; }
