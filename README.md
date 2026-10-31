@@ -30,7 +30,7 @@ npm start
 Then connect Claude Code:
 
 ```bash
-claude mcp add --transport http electroscope http://127.0.0.1:47821/mcp
+claude mcp add --transport http electroscope http://127.0.0.1:7821/mcp
 ```
 
 Ask Claude something like "look at the board under the microscope and tell me if the solder joints on U2 look bridged". See [docs/mcp.md](docs/mcp.md) for the tools, arguments and security model, and for connecting other clients.

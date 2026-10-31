@@ -52,8 +52,10 @@ async function startServer(preferredPort: number): Promise<void> {
   }
   const version = app.getVersion();
   let lastError = '';
-  const attempts = preferredPort === 0 ? 1 : 10;
-  for (let port = preferredPort; port < preferredPort + attempts; port++) {
+  // The preferred port and the next nine, then any free port: some machines keep large port blocks
+  // unavailable, and a working server on an unusual port beats none (the app shows the live URL).
+  const candidates = preferredPort === 0 ? [0] : [...Array.from({ length: 10 }, (_, i) => preferredPort + i), 0];
+  for (const port of candidates) {
     try {
       http = await startMcpHttp({
         port,

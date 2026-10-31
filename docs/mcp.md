@@ -1,7 +1,7 @@
 # Electroscope MCP reference
 
-Electroscope runs an MCP server inside the app, over Streamable HTTP, on `http://127.0.0.1:47821/mcp`.
-If that port is taken it tries the next nine; the live address is always shown in the app. You can change the port in Settings.
+Electroscope runs an MCP server inside the app, over Streamable HTTP, on `http://127.0.0.1:7821/mcp`.
+If that port is taken it tries the next nine, then any free port; the live address is always shown in the app. You can change the port in Settings.
 
 The app owns the camera. Claude never opens it, so the live view in the window keeps running while Claude asks for stills.
 
@@ -9,7 +9,7 @@ The app owns the camera. Claude never opens it, so the live view in the window k
 
 ```bash
 # Claude Code
-claude mcp add --transport http electroscope http://127.0.0.1:47821/mcp
+claude mcp add --transport http electroscope http://127.0.0.1:7821/mcp
 ```
 
 Any client that speaks Streamable HTTP can use the same URL. For clients that only launch local stdio servers (Claude Desktop), bridge it:
@@ -17,7 +17,7 @@ Any client that speaks Streamable HTTP can use the same URL. For clients that on
 ```json
 {
   "mcpServers": {
-    "electroscope": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:47821/mcp"] }
+    "electroscope": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:7821/mcp"] }
   }
 }
 ```

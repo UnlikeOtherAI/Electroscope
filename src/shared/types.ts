@@ -131,7 +131,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  port: 47821,
+  port: 7821,
   claudeAccess: true,
   lastCameraId: null,
   orientations: {},
