@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16263d"/>
+      <stop offset="1" stop-color="#08111f"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#b8efff"/>
+      <stop offset="0.5" stop-color="#4aa8ff"/>
+      <stop offset="1" stop-color="#2358d8"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0.42" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#17406a"/>
+      <stop offset="0.6" stop-color="#0c2440"/>
+      <stop offset="1" stop-color="#071426"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff9a76" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ff9a76" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="lens"><circle cx="512" cy="512" r="236"/></clipPath>
+  </defs>
+
+  <!-- tile -->
+  <rect x="48" y="48" width="928" height="928" rx="212" fill="url(#bg)"/>
+  <rect x="48.5" y="48.5" width="927" height="927" rx="211.5" fill="none" stroke="#ffffff" stroke-opacity="0.10"/>
+
+  <!-- lens barrel -->
+  <circle cx="512" cy="512" r="330" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="64" transform="translate(0 14)"/>
+  <circle cx="512" cy="512" r="330" fill="none" stroke="url(#ring)" stroke-width="64"/>
+  <circle cx="512" cy="512" r="296" fill="none" stroke="#ffffff" stroke-opacity="0.38" stroke-width="5"/>
+  <circle cx="512" cy="512" r="364" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="4"/>
+
+  <!-- glass with a circuit board under the lens -->
+  <circle cx="512" cy="512" r="262" fill="url(#glass)"/>
+  <g clip-path="url(#lens)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#3fb7ff" stroke-opacity="0.45" stroke-width="12">
+      <path d="M250 640 H360 L420 580 H470"/>
+      <path d="M250 430 H330 L390 370 V300"/>
+      <path d="M774 600 H690 L630 660 V740"/>
+      <path d="M774 400 H700 L650 350 H590"/>
+      <path d="M470 780 V690 L520 640"/>
+    </g>
+    <g stroke="#7fe0ff" stroke-opacity="0.95" stroke-width="16">
+      <path d="M250 512 H410 L460 512"/>
+      <path d="M564 512 H620 L690 442 H774"/>
+    </g>
+  </g>
+  <g fill="#7fe0ff">
+    <circle cx="256" cy="512" r="15" fill-opacity="0.95"/>
+    <circle cx="768" cy="442" r="15" fill-opacity="0.95"/>
+    <g fill-opacity="0.55">
+      <circle cx="470" cy="580" r="12"/><circle cx="390" cy="300" r="12"/><circle cx="630" cy="740" r="12"/><circle cx="590" cy="350" r="12"/><circle cx="520" cy="640" r="12"/>
+    </g>
+  </g>
+
+  <!-- focus reticle -->
+  <g stroke="#ffffff" stroke-opacity="0.8" stroke-width="9" stroke-linecap="round">
+    <path d="M512 262 V318"/><path d="M512 706 V762"/>
+    <path d="M262 512 H318" stroke-opacity="0"/><path d="M706 512 H762" stroke-opacity="0"/>
+  </g>
+  <circle cx="512" cy="512" r="104" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="7" stroke-dasharray="3 22" stroke-linecap="round"/>
+
+  <!-- the spark: where Claude is looking -->
+  <circle cx="512" cy="512" r="118" fill="url(#glow)"/>
+  <circle cx="512" cy="512" r="46" fill="#ff8a65"/>
+  <circle cx="512" cy="512" r="46" fill="none" stroke="#ffd2c2" stroke-width="6" stroke-opacity="0.9"/>
+  <circle cx="499" cy="499" r="12" fill="#fff" fill-opacity="0.85"/>
+
+  <!-- glass gloss -->
+  <path d="M300 372 A236 236 0 0 1 470 282 A300 300 0 0 0 300 372 Z" fill="url(#gloss)"/>
+  <ellipse cx="400" cy="330" rx="120" ry="52" transform="rotate(-38 400 330)" fill="url(#gloss)" opacity="0.8"/>
+</svg>

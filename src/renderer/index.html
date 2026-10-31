@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; media-src 'self' blob: mediastream:; connect-src 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Electroscope</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar">
+      <div class="brand"><span id="logo"></span><span class="brand-name">Electroscope</span></div>
+      <div class="titlebar-center">
+        <button id="claude-pill" class="claude-pill" type="button" title="Toggle Claude's access to the camera">
+          <span class="pill-dot"></span><span id="claude-pill-text">Claude can see</span>
+        </button>
+      </div>
+      <div class="titlebar-actions"><button id="open-settings" class="icon-btn" type="button" title="Settings"></button></div>
+    </header>
+
+    <aside class="rail rail-left">
+      <section class="card">
+        <div class="card-head"><h2>Cameras</h2><button id="refresh" class="icon-btn small" type="button" title="Rescan cameras"></button></div>
+        <ul id="camera-list" class="camera-list"></ul>
+      </section>
+
+      <section class="card claude-card" id="claude-card">
+        <div class="card-head">
+          <h2><span class="claude-mark"></span>Claude</h2>
+          <label class="switch" title="Allow Claude to capture frames">
+            <input id="access-toggle" type="checkbox" role="switch" aria-label="Allow Claude to see the microscope" />
+            <span class="track"></span>
+          </label>
+        </div>
+        <p id="claude-status" class="muted small">Starting…</p>
+        <ul id="client-list" class="client-list"></ul>
+        <div class="endpoint">
+          <code id="endpoint">—</code>
+          <button id="copy-url" class="icon-btn small" type="button" title="Copy MCP URL"></button>
+        </div>
+        <button id="copy-cmd" class="btn wide" type="button"></button>
+        <p class="muted tiny">Claude only gets still frames when it asks. Your live view is never interrupted.</p>
+      </section>
+    </aside>
+
+    <main class="center">
+      <div class="stage" id="stage">
+        <div class="frame" id="frame" hidden>
+          <div class="zoomer" id="zoomer"><video id="video" muted playsinline autoplay></video></div>
+          <div class="overlay" id="overlay-grid" hidden></div>
+          <div class="overlay" id="overlay-cross" hidden></div>
+          <div class="hud hud-tl"><span id="hud-cam">—</span><span class="sep"></span><span id="hud-res">—</span><span class="sep"></span><span id="hud-fps">—</span></div>
+          <div class="hud hud-bl focus-meter" title="Live sharpness. Turn the focus ring until this peaks."><span class="label">Focus</span><div class="bar"><i id="focus-bar"></i><b id="focus-peak"></b></div><span id="focus-val">—</span></div>
+          <div class="hud hud-br" id="hud-zoom" hidden></div>
+          <div class="claude-ring" id="claude-ring"><span id="claude-ring-text">Claude is looking…</span></div>
+        </div>
+        <div class="empty" id="empty" hidden>
+          <div class="empty-art" id="empty-art"></div>
+          <h3 id="empty-title">No camera</h3>
+          <p id="empty-text" class="muted"></p>
+          <button id="empty-retry" class="btn primary" type="button">Try again</button>
+        </div>
+      </div>
+
+      <div class="toolbar" role="toolbar" aria-label="Viewer tools">
+        <div class="group">
+          <button id="tb-zoom-out" class="icon-btn" type="button" title="Zoom out"></button>
+          <button id="tb-zoom-reset" class="chip-btn" type="button" title="Reset zoom">100%</button>
+          <button id="tb-zoom-in" class="icon-btn" type="button" title="Zoom in"></button>
+        </div>
+        <div class="group">
+          <button id="tb-grid" class="icon-btn toggle" type="button" title="Grid"></button>
+          <button id="tb-cross" class="icon-btn toggle" type="button" title="Crosshair"></button>
+          <button id="tb-freeze" class="icon-btn toggle" type="button" title="Freeze view (Space)"></button>
+        </div>
+        <div class="spacer"></div>
+        <div class="group">
+          <button id="tb-save" class="btn" type="button" title="Save a full-resolution photo to Pictures\Electroscope"></button>
+          <button id="tb-share" class="btn accent" type="button" title="Pin this frame for Claude, with a note"></button>
+        </div>
+      </div>
+
+      <section class="activity card">
+        <div class="card-head">
+          <h2>Claude's view <span id="activity-count" class="badge">0</span></h2>
+          <div class="row"><button id="open-folder" class="btn small ghost" type="button"></button><button id="clear-activity" class="btn small ghost" type="button"></button></div>
+        </div>
+        <div id="activity-strip" class="strip"><p class="muted small strip-empty">Frames Claude captures, and frames you share, show up here so you always know what it has seen.</p></div>
+      </section>
+    </main>
+
+    <aside class="rail rail-right">
+      <section class="card">
+        <div class="card-head"><h2>Image</h2></div>
+        <div class="field">
+          <span class="field-label">Orientation</span>
+          <div class="seg">
+            <button id="rot-ccw" class="icon-btn" type="button" title="Rotate counter-clockwise"></button>
+            <button id="rot-cw" class="icon-btn" type="button" title="Rotate clockwise"></button>
+            <button id="mirror" class="icon-btn toggle" type="button" title="Mirror"></button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Resolution</span>
+          <select id="resolution" class="select"></select>
+        </div>
+      </section>
+      <section class="card grow">
+        <div class="card-head"><h2>Camera controls</h2></div>
+        <div id="controls" class="controls"></div>
+      </section>
+    </aside>
+  </div>
+
+  <dialog id="settings" class="dialog">
+    <form method="dialog" id="settings-form">
+      <h3>Settings</h3>
+      <label class="field"><span class="field-label">MCP port</span><input id="set-port" class="input" type="number" min="1024" max="65535" /></label>
+      <label class="field"><span class="field-label">Theme</span>
+        <select id="set-theme" class="select"><option value="system">Match Windows</option><option value="dark">Dark</option><option value="light">Light</option></select>
+      </label>
+      <p class="muted small">Electroscope listens on 127.0.0.1 only. Nothing leaves this computer unless Claude asks for a frame.</p>
+      <div class="dialog-actions"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok">Save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="share-dialog" class="dialog">
+    <form method="dialog" id="share-form">
+      <h3>Share with Claude</h3>
+      <img id="share-preview" class="share-preview" alt="Frame to share" />
+      <label class="field"><span class="field-label">Note (optional)</span><textarea id="share-note" class="input" rows="3" placeholder="What should Claude look at? e.g. “U3 gets hot right after power-on”"></textarea></label>
+      <div class="dialog-actions"><button class="btn" value="cancel">Cancel</button><button class="btn accent" value="ok">Share</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="lightbox" class="dialog lightbox">
+    <img id="lightbox-img" alt="Captured frame" />
+    <div class="lightbox-bar"><span id="lightbox-meta" class="muted small"></span><div class="row"><button id="lightbox-reveal" class="btn small" type="button">Show in folder</button><button id="lightbox-close" class="btn small primary" type="button">Close</button></div></div>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="main.js"></script>
+</body>
+</html>

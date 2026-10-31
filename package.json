@@ -1,0 +1,60 @@
+{
+  "name": "electroscope",
+  "productName": "Electroscope",
+  "version": "0.1.0",
+  "description": "Electronics microscope companion: a live camera viewer for you, on-demand snapshots for AI over MCP.",
+  "license": "MIT",
+  "author": "UnlikeOtherAI",
+  "homepage": "https://github.com/UnlikeOtherAI/Electroscope",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UnlikeOtherAI/Electroscope.git"
+  },
+  "type": "module",
+  "main": "dist/main/index.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build && node scripts/e2e.mjs",
+    "dist": "npm run build && electron-builder --win --dir",
+    "dist:installer": "npm run build && electron-builder --win",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "build": {
+    "appId": "ai.unlikeother.electroscope",
+    "productName": "Electroscope",
+    "copyright": "Copyright (c) UnlikeOtherAI",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["dist/**/*", "package.json"],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }]
+    },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": { "NSCameraUsageDescription": "Electroscope shows your microscope camera and shares still frames with your AI assistant when you allow it." }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.1",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  }
+}
