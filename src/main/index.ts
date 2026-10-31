@@ -1,12 +1,14 @@
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, session, shell } from 'electron';
 import { IPC } from '../shared/ipc.js';
-import type { CaptureResult, ServerInfo, Settings } from '../shared/types.js';
+import type { ServerInfo, Settings } from '../shared/types.js';
 import { RendererBridge, type CommandResult } from './bridge.js';
 import { CaptureStore } from './captures.js';
 import { AppHub } from './hub.js';
 import { startMcpHttp, type McpHttp } from './mcp/http.js';
 import { createMcpServer } from './mcp/tools.js';
+import { lanAddresses } from './net.js';
 import { SettingsStore } from './store.js';
 
 const isMac = process.platform === 'darwin';
@@ -27,8 +29,9 @@ if (process.env['ELECTROSCOPE_USER_DATA']) {
 let win: BrowserWindow | null = null;
 let store: SettingsStore;
 let hub: AppHub;
+let photos: CaptureStore;
 let http: McpHttp | null = null;
-let serverInfo: ServerInfo = { running: false, port: 0, url: '', clients: [] };
+let serverInfo: ServerInfo = { running: false, port: 0, url: '', addresses: [], hostname: '', network: true };
 
 const bridge = new RendererBridge((envelope) => {
   if (!win || win.isDestroyed()) return false;
@@ -45,12 +48,14 @@ function publishServerInfo(patch: Partial<ServerInfo> = {}): void {
   toRenderer(IPC.serverInfo, serverInfo);
 }
 
-async function startServer(preferredPort: number): Promise<void> {
+async function startServer(preferredPort: number, network: boolean): Promise<void> {
   if (http) {
     await http.close();
     http = null;
   }
   const version = app.getVersion();
+  const host = process.env['ELECTROSCOPE_HOST'] ?? (network ? '0.0.0.0' : '127.0.0.1');
+  const addresses = lanAddresses();
   let lastError = '';
   // The preferred port and the next nine, then any free port: some machines keep large port blocks
   // unavailable, and a working server on an unusual port beats none (the app shows the live URL).
@@ -59,34 +64,43 @@ async function startServer(preferredPort: number): Promise<void> {
     try {
       http = await startMcpHttp({
         port,
+        host,
         version,
         createServer: () => createMcpServer(bridge, hub, version),
-        onClientsChanged: (clients) => publishServerInfo({ clients }),
       });
-      publishServerInfo({ running: true, port: http.port, url: http.url, clients: [], error: '' });
+      const open = host !== '127.0.0.1';
+      publishServerInfo({
+        running: true,
+        port: http.port,
+        url: `http://${open ? (addresses[0] ?? '127.0.0.1') : '127.0.0.1'}:${http.port}/mcp`,
+        addresses,
+        hostname: hostname(),
+        network: open,
+        error: '',
+      });
       return;
     } catch (e) {
       lastError = (e as Error).message;
     }
   }
-  publishServerInfo({ running: false, port: preferredPort, url: '', error: lastError });
+  publishServerInfo({ running: false, port: preferredPort, url: '', addresses, hostname: hostname(), network, error: lastError });
 }
 
 async function patchSettings(patch: Partial<Settings>): Promise<Settings> {
   const before = store.get();
   const next = await store.patch(patch);
   if (patch.theme) nativeTheme.themeSource = next.theme;
-  if (patch.port !== undefined && patch.port !== before.port) await startServer(next.port);
+  if (next.port !== before.port || next.network !== before.network) await startServer(next.port, next.network);
   toRenderer(IPC.settingsChanged, next);
   return next;
 }
 
 function createWindow(): void {
   win = new BrowserWindow({
-    width: 1420,
-    height: 900,
-    minWidth: 980,
-    minHeight: 620,
+    width: 1360,
+    height: 860,
+    minWidth: 900,
+    minHeight: 580,
     show: false,
     title: 'Electroscope',
     icon: join(__dirname, '../icon.png'),
@@ -136,22 +150,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.getSettings, () => store.get());
   ipcMain.handle(IPC.patchSettings, (_e, patch: Partial<Settings>) => patchSettings(patch));
   ipcMain.handle(IPC.getServerInfo, () => serverInfo);
-  ipcMain.handle(IPC.getActivity, () => hub.listActivity());
-  ipcMain.handle(IPC.clearActivity, () => hub.clearActivity());
-  ipcMain.handle(IPC.getShared, () => hub.sharedCount());
-  ipcMain.handle(IPC.shareFrame, async (_e, result: CaptureResult, note: string) => {
-    const entry = await hub.addShared(result, note);
-    return { path: entry.path, count: hub.sharedCount() };
-  });
-  ipcMain.handle(IPC.saveCapture, async (_e, data: Uint8Array, mimeType: string) => {
-    const store = new CaptureStore(join(app.getPath('pictures'), 'Electroscope'), 100_000);
-    return store.save(data, mimeType, 'capture');
-  });
-  ipcMain.handle(IPC.openCaptures, async () => {
-    await shell.openPath(join(app.getPath('pictures'), 'Electroscope'));
-  });
-  ipcMain.handle(IPC.revealFile, (_e, path: string) => {
-    shell.showItemInFolder(path);
+  ipcMain.handle(IPC.savePhoto, (_e, data: Uint8Array, mimeType: string) => photos.save(data, mimeType, 'photo'));
+  ipcMain.handle(IPC.openPhotos, async () => {
+    await shell.openPath(photos.dir);
   });
   ipcMain.on(IPC.rendererReady, () => bridge.rendererReady());
   ipcMain.on(IPC.commandResult, (_e, msg: CommandResult) => bridge.handleResult(msg));
@@ -173,15 +174,8 @@ if (!app.requestSingleInstanceLock()) {
     const settings = await store.load();
     nativeTheme.themeSource = settings.theme;
 
-    hub = new AppHub(
-      () => store.get().claudeAccess,
-      new CaptureStore(join(app.getPath('userData'), 'captures'), 200),
-      new CaptureStore(join(app.getPath('userData'), 'shared'), 200),
-      {
-        activityAdded: (entry) => toRenderer(IPC.activityAdded, entry),
-        claudeCapturing: (tool) => toRenderer(IPC.claudeCapturing, tool),
-      },
-    );
+    photos = new CaptureStore(join(app.getPath('pictures'), 'Electroscope'), 100_000);
+    hub = new AppHub(new CaptureStore(join(app.getPath('userData'), 'captures'), 200), photos);
 
     // Only our own bundled page may use the camera.
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
@@ -192,7 +186,10 @@ if (!app.requestSingleInstanceLock()) {
     });
 
     registerIpc();
-    await startServer(process.env['ELECTROSCOPE_PORT'] ? Number(process.env['ELECTROSCOPE_PORT']) : settings.port);
+    await startServer(
+      process.env['ELECTROSCOPE_PORT'] ? Number(process.env['ELECTROSCOPE_PORT']) : settings.port,
+      settings.network,
+    );
     createWindow();
   });
 

@@ -22,6 +22,11 @@ export const icons = {
   close: base('<path d="m6 6 12 12M18 6 6 18"/>'),
   check: base('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
   trash: base('<path d="M4.5 7h15M10 7V4.5h4V7M6.5 7l.8 12.5h9.4L17.5 7"/>'),
+  circle: base('<circle cx="12" cy="12" r="7.5"/>'),
+  rect: base('<rect x="4.5" y="6.5" width="15" height="11" rx="1.5"/>'),
+  arrow: base('<path d="M5 19 19 5M10 5h9v9"/>'),
+  text: base('<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>'),
+  plus: base('<path d="M12 4v16M4 12h16"/>'),
   // A small version of build/icon.svg, for the title bar.
   logo: `<svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><defs><linearGradient id="lgb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16263d"/><stop offset="1" stop-color="#08111f"/></linearGradient><linearGradient id="lgr" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#b8efff"/><stop offset="0.5" stop-color="#4aa8ff"/><stop offset="1" stop-color="#2358d8"/></linearGradient></defs><rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="url(#lgb)"/><circle cx="16" cy="16" r="10.3" fill="none" stroke="url(#lgr)" stroke-width="2.2"/><path d="M8 16h6M18 16h2.5l2.5-2.5h2" stroke="#7fe0ff" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="16" r="2.3" fill="#ff8a65"/></svg>`,
 };

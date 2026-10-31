@@ -1,74 +1,83 @@
 # Electroscope MCP reference
 
-Electroscope runs an MCP server inside the app, over Streamable HTTP, on `http://127.0.0.1:7821/mcp`.
-If that port is taken it tries the next nine, then any free port; the live address is always shown in the app. You can change the port in Settings.
+Electroscope serves MCP over Streamable HTTP at `http://<ip>:7821/mcp`. The exact address is in the app's title bar; **Copy prompt for agent** puts it, with connection instructions and the tool list, on your clipboard.
 
-The app owns the camera. Claude never opens it, so the live view in the window keeps running while Claude asks for stills.
+If the port is taken it tries the next nine, then any free port. The default is 7821 and can be changed in Settings. `GET /health` returns `{"name":"electroscope","ok":true}`.
+
+The app owns the camera and a human may be watching the same live view, so agents never open the camera themselves: they ask for still frames and drive the app's controls.
 
 ## Connect a client
 
 ```bash
-# Claude Code
-claude mcp add --transport http electroscope http://127.0.0.1:7821/mcp
+claude mcp add --transport http electroscope http://<ip>:7821/mcp   # Claude Code
 ```
 
-Any client that speaks Streamable HTTP can use the same URL. For clients that only launch local stdio servers (Claude Desktop), bridge it:
+Any client that supports remote HTTP MCP servers can use the URL. For clients that only start local stdio servers:
 
 ```json
-{
-  "mcpServers": {
-    "electroscope": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:7821/mcp"] }
-  }
-}
+{ "mcpServers": { "electroscope": { "command": "npx", "args": ["-y", "mcp-remote", "http://<ip>:7821/mcp"] } } }
 ```
+
+## Coordinates
+
+Positions are normalised **0..1 in the oriented frame**: `x` across, `y` down, `(0,0)` top-left, after any rotation or mirroring. Capture `region`s, marks, and the view centre all use them, so an agent can look at a frame and then point at exactly what it saw. Sizes are fractions of the frame width unless noted.
 
 ## Tools
 
 | Tool | What it does |
 | --- | --- |
-| `get_status` | Active camera, resolution, fps, orientation, live focus score, adjustable controls with ranges, and whether the human has paused Claude. Works even while paused. |
-| `list_cameras` | Rescans and lists every camera on the machine. Works even while paused. |
-| `capture_snapshot` | One still frame, returned as an image plus metrics and hints. |
-| `capture_sequence` | 2-6 frames at a fixed interval, to watch an LED blink or a part heat up. |
-| `select_camera` | Switch the live view to another camera, optionally at a given resolution. |
-| `set_camera_controls` | Set focus, zoom, exposure, brightness and so on, where the camera supports them. |
-| `set_orientation` | Rotate (0/90/180/270) and/or mirror. Affects the human's view and Claude's captures. |
-| `get_shared_frames` | Frames the human pinned with **Share with Claude**, with their notes. |
+| `get_status` | Active camera, resolution, fps, orientation, view (zoom, centre, overlays, colours, frozen), current marks, live focus score, and every camera control with its range. Controls marked `responsive: false` are accepted by the camera but do nothing. |
+| `list_cameras` | Rescan and list every camera. |
+| `select_camera` | Switch the live view to another camera, optionally at a resolution. Clears marks. |
+| `capture_snapshot` | One still image plus metrics and hints. |
+| `capture_sequence` | 2-6 frames at an interval (default `max_width` 800). |
+| `save_photo` | Save a full-resolution PNG in `Pictures/Electroscope` on the computer running Electroscope; returns the path, no image. |
+| `set_camera_controls` | Set focus, zoom, exposure, brightness and so on. Setting a manual value (`focusDistance`, `exposureTime`, `colorTemperature`) switches the matching mode to manual first. Anything the camera ignores comes back in `rejected`. |
+| `set_orientation` | Rotate 0/90/180/270 and mirror. Affects the window and captures. Clears marks. |
+| `set_view` | Zoom (1-12), pan (`center_x`, `center_y`), `grid`, `crosshair`, `grid_color`, `crosshair_color` (any CSS colour), `frozen`. Captures always read the live camera, even while frozen. |
+| `annotate` | Draw marks on the live view (below). |
+| `clear_annotations` | Remove marks by `ids`, or all of them. |
 
-### `capture_snapshot` arguments
+### `capture_snapshot` and `save_photo` arguments
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `camera` | active camera | Camera id or part of its name. A non-active camera is opened just long enough for one frame. |
-| `max_width` | 1280 | Longest-edge budget in pixels (160-3840). Never upscales. |
-| `format` | `jpeg` | `jpeg` or `png`. |
-| `quality` | 85 | JPEG quality (30-100). |
-| `region` | whole frame | `{x, y, width, height}`, normalised 0..1 in the oriented frame. The crop is taken from the full-resolution frame, so a small region is a real close-up, not an upscale. |
-| `follow_user_view` | false | Capture exactly the area the human has zoomed and panned to in the window. Overrides `region`. |
+| `max_width` | 1280 (`save_photo`: 8192) | Longest-edge budget in pixels, 160-3840. Never upscales. |
+| `format` | `jpeg` (`save_photo`: `png`) | `jpeg` or `png`. |
+| `quality` | 85 | JPEG quality, 30-100. |
+| `region` | whole frame | `{x, y, width, height}`. Taken from the full-resolution frame, so a small region is a real close-up, not an upscale. |
+| `follow_user_view` | false | Capture exactly the area the human has zoomed and panned to. Overrides `region`. |
+| `include_annotations` | false | Burn the current marks into the image. |
 
-The text part of the result carries:
+The text result carries `focus_score` (variance of the Laplacian on a normalised copy; compare only within one scene), `brightness` (0-255), `overexposed_fraction`, `underexposed_fraction`, `source_resolution`, `region`, `orientation`, `captured_at`, `saved_to`, and `hints` such as blown highlights, a dark image, or very low focus.
 
-- `focus_score`: variance of the Laplacian on a normalised copy of the image. Higher is sharper. Compare scores of the same scene, not across scenes.
-- `brightness` (0-255), `overexposed_fraction`, `underexposed_fraction`.
-- `source_resolution`, `region`, `orientation`, `captured_at`, `saved_to` (the file on disk).
-- `hints`: plain-language warnings such as blown highlights, a dark image, or very low focus.
+### `annotate`
 
-### Controls
+`annotate({annotations: [...]})` adds or replaces marks. Each mark:
 
-`get_status` lists the controls the camera exposes, for example `focusMode`, `focusDistance`, `zoom`, `exposureMode`, `exposureTime`, `brightness`, `contrast`, `saturation`, `sharpness`, `colorTemperature`, `torch`. Setting a manual value (`focusDistance`, `exposureTime`, `colorTemperature`) switches the matching mode to manual first.
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `type` | all | `circle`, `crosshair`, `rect`, `arrow`, `text` |
+| `id` | all | Optional. Reusing an id replaces that mark, so you can move or restyle it. |
+| `x`, `y` | all | circle/crosshair: centre; rect: top-left; arrow: tail; text: left edge. |
+| `radius` | circle | Fraction of frame width, default 0.04. |
+| `size` | crosshair | Half-length of each arm, fraction of frame width, default 0.03. |
+| `width`, `height` | rect | Fractions of the frame. |
+| `to_x`, `to_y` | arrow | The point it points at. |
+| `text`, `font_size` | text | The words; height as a fraction of frame height, default 0.04. |
+| `label` | non-text | A caption beside the mark. |
+| `color` | all | Any CSS colour: `"#ff3b30"`, `"red"`, `"rgb(0 200 255)"`. Default red. |
+| `thickness` | all | Line width in thousandths of the frame width, default 3. |
+| `fill` | circle, rect | Usually translucent: `"rgba(255,0,0,0.2)"`. |
+| `background` | text, labels | Colour behind the words, default translucent black; `"none"` for none. |
 
-Many inexpensive UVC microscope cameras accept a control without applying it. Electroscope reads the value back; if the camera ignored the change, the tool reports that in `rejected` and marks the control `"responsive": false` in `get_status`.
+Marks are drawn on the live view and stay on their feature when the human zooms or pans. They are cleared when the camera or orientation changes. Marks the human draws in the window are in the same list, so an agent sees them in `get_status` and can restyle or remove them. Invalid colours and out-of-range coordinates are rejected with a message saying what to fix.
 
-## What the human controls
+## Security
 
-- **Claude access** switch (also the pill in the title bar). When off, every tool except `get_status` and `list_cameras` returns an error telling Claude to ask the human to resume.
-- **Claude's view** strip lists every frame Claude captured, with time, camera and size. Click a frame to open the saved file. A coral ring and flash show on the live view whenever Claude captures.
-- **Share with Claude** pins the current frame (or the zoomed view) with a note. Claude picks it up with `get_shared_frames`.
-
-## Security model
-
-- The server binds to `127.0.0.1` only.
-- Requests whose `Host` is not localhost, or whose `Origin` is not a localhost origin, get `403`. This blocks DNS-rebinding and drive-by requests from web pages.
-- Only the app's bundled page can use the camera. The renderer is sandboxed with context isolation and a strict content security policy.
-- Claude's captures are saved under the app data folder (`%APPDATA%\Electroscope\captures` on Windows) and pruned to the newest 200. Frames you shared are kept separately. Photos you save yourself go to `Pictures\Electroscope`.
-- There is no authentication token. Anything running as you on this machine can reach the port. Pause Claude access when you do not want frames available.
+- The server listens on every network interface by default so agents on other computers can reach it; turn this off in Settings to listen on `127.0.0.1` only. `ELECTROSCOPE_HOST` overrides the bind address.
+- There is no authentication. Anyone who can reach the port can look through the camera and control it. Use a network you trust.
+- Requests whose `Host` is not an IP address, `localhost`, or this computer's own name are refused (`403`), and requests carrying a cross-site `Origin` are refused. This blocks DNS-rebinding and drive-by requests from web pages.
+- Only the app's bundled page can use the camera; the renderer is sandboxed with context isolation and a strict content security policy.
+- Frames returned to agents are kept under the app data folder (newest 200). `save_photo` and **Save photo** write to `Pictures/Electroscope`.

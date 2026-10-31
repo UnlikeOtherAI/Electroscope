@@ -36,6 +36,59 @@ export interface CameraControl {
   responsive?: boolean;
 }
 
+export type AnnotationType = 'circle' | 'crosshair' | 'rect' | 'arrow' | 'text';
+
+/**
+ * A mark drawn over the live view by an agent. Positions are normalised 0..1 in the oriented frame
+ * (the same coordinates as capture regions). Sizes are fractions of the frame width unless noted,
+ * so a mark stays on its feature when the human zooms.
+ */
+export interface Annotation {
+  id: string;
+  type: AnnotationType;
+  x: number;
+  y: number;
+  /** circle: radius, fraction of frame width. */
+  radius?: number;
+  /** crosshair: half-length of each arm, fraction of frame width. */
+  size?: number;
+  /** rect: width and height, fractions of the frame. */
+  width?: number;
+  height?: number;
+  /** arrow: the point the arrow ends on (x,y is the tail). */
+  toX?: number;
+  toY?: number;
+  text?: string;
+  /** Text size, fraction of frame height. */
+  fontSize?: number;
+  /** Any CSS colour. */
+  color: string;
+  /** Line width in thousandths of the frame width. */
+  thickness: number;
+  fill?: string;
+  /** A caption drawn next to circles, crosshairs, rectangles and arrows. */
+  label?: string;
+  /** Colour behind text; 'none' for no backing. */
+  background?: string;
+}
+
+export type AnnotationInput = Partial<Omit<Annotation, 'type'>> & Pick<Annotation, 'type' | 'x' | 'y'>;
+
+/** What the human sees in the window: zoom, pan and overlays. */
+export interface ViewState {
+  /** 1 = whole frame. */
+  zoom: number;
+  /** Centre of the visible area, 0..1 in the oriented frame. */
+  centerX: number;
+  centerY: number;
+  grid: boolean;
+  crosshair: boolean;
+  gridColor: string;
+  crosshairColor: string;
+  /** The on-screen view is paused. Captures still read the live camera. */
+  frozen: boolean;
+}
+
 export interface CameraState {
   active: CameraInfo | null;
   cameras: CameraInfo[];
@@ -46,6 +99,8 @@ export interface CameraState {
   focusScore: number | null;
   controls: CameraControl[];
   maxResolution: { width: number; height: number } | null;
+  view: ViewState;
+  annotations: Annotation[];
 }
 
 export interface CaptureRequest {
@@ -55,9 +110,8 @@ export interface CaptureRequest {
   quality: number;
   region?: Region;
   followUserView?: boolean;
-  /** Where the capture came from, for the activity strip. */
-  source: 'claude' | 'user';
-  note?: string;
+  /** Draw the agent's annotations onto the image. */
+  annotated?: boolean;
 }
 
 export interface FrameMetrics {
@@ -82,27 +136,7 @@ export interface CaptureResult {
   region: Region | null;
   orientation: Orientation;
   metrics: FrameMetrics;
-  thumbnail: string;
   capturedAt: string;
-}
-
-export interface ActivityEntry {
-  id: string;
-  at: string;
-  source: 'claude' | 'user';
-  tool: string;
-  cameraLabel: string;
-  width: number;
-  height: number;
-  bytes: number;
-  path: string;
-  thumbnail: string;
-  note?: string;
-  region: Region | null;
-}
-
-export interface SharedFrame extends ActivityEntry {
-  note: string;
 }
 
 export interface ClientInfo {
@@ -116,14 +150,20 @@ export interface ClientInfo {
 export interface ServerInfo {
   running: boolean;
   port: number;
+  /** Address the app is reachable on from other computers; falls back to loopback. */
   url: string;
+  /** Every non-virtual IPv4 address of this computer, best first. */
+  addresses: string[];
+  hostname: string;
+  /** Listening on the network, not just this computer. */
+  network: boolean;
   error?: string;
-  clients: ClientInfo[];
 }
 
 export interface Settings {
   port: number;
-  claudeAccess: boolean;
+  /** Let other computers on the network connect. */
+  network: boolean;
   lastCameraId: string | null;
   orientations: Record<string, Orientation>;
   resolutions: Record<string, { width: number; height: number }>;
@@ -132,7 +172,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   port: 7821,
-  claudeAccess: true,
+  network: true,
   lastCameraId: null,
   orientations: {},
   resolutions: {},
@@ -149,6 +189,9 @@ export interface RendererCommands {
     state: CameraState;
   };
   setOrientation(args: Partial<Orientation>): CameraState;
+  setView(args: Partial<ViewState>): CameraState;
+  /** Add or replace marks (by id), remove some, or clear all. */
+  setAnnotations(args: { upsert?: AnnotationInput[]; remove?: string[]; clear?: boolean }): CameraState;
   capture(args: CaptureRequest): CaptureResult;
   refreshCameras(): CameraState;
 }

@@ -1,24 +1,23 @@
-import type {
-  CameraState,
-  CaptureRequest,
-  CaptureResult,
-  Orientation,
-  Region,
-  RendererCommands,
-} from '../shared/types.js';
+import type { CameraState, CaptureRequest, CaptureResult, Orientation, RendererCommands } from '../shared/types.js';
+import { drawAnnotations } from './annotations.js';
 import { DEFAULT_ORIENTATION, type CameraSession } from './camera.js';
-import { computeMetrics, encode, renderFrame, thumbnailDataUrl } from './frames.js';
+import { computeMetrics, encode, renderFrame } from './frames.js';
+import type { Viewer } from './viewer.js';
 
 export interface CommandContext {
   session: CameraSession;
-  userViewRegion(): Region;
+  viewer: Viewer;
   setOrientation(cameraId: string, o: Orientation): Promise<void>;
   rememberCamera(cameraId: string, size?: { width: number; height: number }): Promise<void>;
 }
 
-/** Grab, orient, crop, scale and encode a frame. Used for both Claude's requests and the human's "share". */
+function fullState({ session, viewer }: CommandContext): CameraState {
+  return { ...session.state(), view: viewer.view(), annotations: viewer.annotations };
+}
+
+/** Grab, orient, crop, scale and encode a frame. Used for agent captures and for "Save photo". */
 export async function captureFrame(ctx: CommandContext, req: CaptureRequest): Promise<CaptureResult> {
-  const { session } = ctx;
+  const { session, viewer } = ctx;
   let cam = session.activeCamera;
   let orientation = session.orientation;
   let grab: Awaited<ReturnType<CameraSession['grab']>>;
@@ -35,16 +34,19 @@ export async function captureFrame(ctx: CommandContext, req: CaptureRequest): Pr
   } else {
     grab = await session.grab();
   }
-  if (!cam) throw new Error('No camera is open. Ask the human to plug in or select a camera.');
+  if (!cam) throw new Error('No camera is open. Plug in the microscope or select a camera.');
 
   try {
-    const region = req.followUserView ? ctx.userViewRegion() : (req.region ?? null);
+    const region = req.followUserView ? viewer.visibleRegion() : (req.region ?? null);
     const rendered = renderFrame(grab.src, grab.width, grab.height, orientation, region, req.maxWidth);
+    // Metrics first: marks must not change the focus score.
     const metrics = computeMetrics(rendered.canvas, rendered.canvas.width, rendered.canvas.height);
-    const [data, thumbnail] = await Promise.all([
-      encode(rendered.canvas, req.format, req.quality),
-      thumbnailDataUrl(rendered.canvas),
-    ]);
+    // Marks belong to the camera the human is looking at, not to a one-off capture from another.
+    if (req.annotated && cam.id === session.activeId) {
+      const c = rendered.canvas.getContext('2d');
+      if (c) drawAnnotations(c, viewer.annotations, rendered.region, rendered.canvas.width, rendered.canvas.height);
+    }
+    const data = await encode(rendered.canvas, req.format, req.quality);
     const full = rendered.region.width > 0.999 && rendered.region.height > 0.999;
     return {
       data,
@@ -57,7 +59,6 @@ export async function captureFrame(ctx: CommandContext, req: CaptureRequest): Pr
       region: full ? null : rendered.region,
       orientation,
       metrics,
-      thumbnail,
       capturedAt: new Date().toISOString(),
     };
   } finally {
@@ -68,32 +69,43 @@ export async function captureFrame(ctx: CommandContext, req: CaptureRequest): Pr
 export function createCommands(ctx: CommandContext): {
   [K in keyof RendererCommands]: (args: Parameters<RendererCommands[K]>[0]) => Promise<ReturnType<RendererCommands[K]>>;
 } {
-  const { session } = ctx;
+  const { session, viewer } = ctx;
   return {
     async getState() {
-      return session.state();
+      return fullState(ctx);
     },
     async refreshCameras() {
       await session.refresh();
-      return session.state();
+      return fullState(ctx);
     },
     async selectCamera({ cameraId, width, height }) {
       const target = session.resolve(cameraId);
       const size = width && height ? { width, height } : undefined;
       await session.open(target.id, size);
+      viewer.clearAnnotations();
       await ctx.rememberCamera(target.id, size);
-      return session.state();
+      return fullState(ctx);
     },
     async setControls({ controls }) {
       const { applied, rejected } = await session.applyControls(controls);
-      return { applied, rejected, state: session.state() as CameraState };
+      return { applied, rejected, state: fullState(ctx) };
     },
     async setOrientation(patch) {
       const id = session.activeId;
       if (!id) throw new Error('No camera is open');
       const next = { ...(session.orientations[id] ?? DEFAULT_ORIENTATION), ...patch };
       await ctx.setOrientation(id, next);
-      return session.state();
+      return fullState(ctx);
+    },
+    async setView(patch) {
+      viewer.patchView(patch);
+      return fullState(ctx);
+    },
+    async setAnnotations({ upsert, remove, clear }) {
+      if (clear) viewer.clearAnnotations();
+      if (remove?.length) viewer.removeAnnotations(remove);
+      if (upsert?.length) viewer.upsertAnnotations(upsert);
+      return fullState(ctx);
     },
     capture: (req) => captureFrame(ctx, req),
   };

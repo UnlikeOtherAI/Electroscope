@@ -15,8 +15,10 @@ export class SettingsStore {
 
   async load(): Promise<Settings> {
     try {
-      const raw = JSON.parse(await readFile(this.file, 'utf8')) as Partial<Settings>;
-      this.current = { ...DEFAULT_SETTINGS, ...raw };
+      const raw = JSON.parse(await readFile(this.file, 'utf8')) as Record<string, unknown>;
+      // Keep only keys this version knows, so settings from older versions do not leak through.
+      const known = Object.fromEntries(Object.entries(raw).filter(([k]) => k in DEFAULT_SETTINGS));
+      this.current = { ...DEFAULT_SETTINGS, ...known };
     } catch {
       this.current = { ...DEFAULT_SETTINGS };
     }

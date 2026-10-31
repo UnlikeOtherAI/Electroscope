@@ -18,29 +18,57 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && node scripts/e2e.mjs",
-    "dist": "npm run build && electron-builder --win --dir",
-    "dist:installer": "npm run build && electron-builder --win",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "ai.unlikeother.electroscope",
     "productName": "Electroscope",
     "copyright": "Copyright (c) UnlikeOtherAI",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["dist/**/*", "package.json"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
     "win": {
       "icon": "build/icon.ico",
-      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "mac": {
       "icon": "build/icon.png",
       "category": "public.app-category.developer-tools",
-      "target": ["dmg"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "extendInfo": { "NSCameraUsageDescription": "Electroscope shows your microscope camera and shares still frames with your AI assistant when you allow it." }
+      "extendInfo": {
+        "NSCameraUsageDescription": "Electroscope shows your microscope camera and shares still frames with the AI agents you connect.",
+        "NSLocalNetworkUsageDescription": "Electroscope lets AI agents on your network connect to your microscope camera."
+      }
     }
   },
   "devDependencies": {

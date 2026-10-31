@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { hostname as osHostname } from 'node:os';
+import { isIP } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -8,7 +10,10 @@ import type { ClientInfo } from '../../shared/types.js';
 
 export interface McpHttpOptions {
   port: number;
+  /** Interface to bind: 0.0.0.0 for the whole network (default), 127.0.0.1 for this computer only. */
   host?: string;
+  /** Extra DNS names this computer answers to (its own hostname is always allowed). */
+  names?: string[];
   version: string;
   createServer: () => McpServer;
   onClientsChanged?: (clients: ClientInfo[]) => void;
@@ -31,17 +36,22 @@ export interface McpHttp {
 
 const MAX_BODY = 1_000_000;
 
-/** Loopback only: reject anything whose Host or Origin is not localhost (DNS-rebinding protection). */
-function isLocalHost(value: string | undefined): boolean {
-  if (!value) return false;
-  const host = value.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+/**
+ * DNS-rebinding defence. A page on an attacker's domain can be made to resolve to this computer, but
+ * its requests still carry that domain in Host. So accept only IP literals, localhost and this
+ * computer's own names; anything else is refused.
+ */
+function hostAllowed(hostHeader: string | undefined, names: Set<string>): boolean {
+  if (!hostHeader) return false;
+  const name = hostHeader.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  return isIP(name) !== 0 || name === 'localhost' || names.has(name);
 }
 
-function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true; // non-browser clients send none
+/** Browsers always send Origin on cross-site requests; a legitimate agent sends none. */
+function originAllowed(origin: string | undefined, hostHeader: string | undefined): boolean {
+  if (!origin) return true;
   try {
-    return isLocalHost(new URL(origin).host);
+    return new URL(origin).host.toLowerCase() === hostHeader?.toLowerCase();
   } catch {
     return false;
   }
@@ -83,7 +93,9 @@ function rpcError(res: ServerResponse, status: number, code: number, message: st
 }
 
 export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
-  const host = opts.host ?? '127.0.0.1';
+  const host = opts.host ?? '0.0.0.0';
+  const own = osHostname().toLowerCase();
+  const names = new Set([own, `${own}.local`, ...(opts.names ?? []).map((n) => n.toLowerCase())]);
   const ttl = opts.sessionTtlMs ?? 30 * 60_000;
   const sessions = new Map<string, Session>();
 
@@ -104,10 +116,10 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
   sweeper.unref();
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (!isLocalHost(req.headers.host) || !isAllowedOrigin(req.headers.origin)) {
-      return rpcError(res, 403, -32000, 'Forbidden: Electroscope only accepts local connections');
+    if (!hostAllowed(req.headers.host, names) || !originAllowed(req.headers.origin, req.headers.host)) {
+      return rpcError(res, 403, -32000, 'Forbidden: connect using this computer\'s IP address or hostname');
     }
-    const url = new URL(req.url ?? '/', `http://${host}`);
+    const url = new URL(req.url ?? '/', 'http://electroscope');
 
     if (url.pathname === '/health') {
       return sendJson(res, 200, { name: 'electroscope', version: opts.version, ok: true, clients: sessions.size });

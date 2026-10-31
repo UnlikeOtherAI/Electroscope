@@ -85,7 +85,7 @@ export class CameraSession extends EventTarget {
     return this.orientations[id] ?? DEFAULT_ORIENTATION;
   }
 
-  state(): CameraState {
+  state(): Omit<CameraState, 'view' | 'annotations'> {
     return {
       active: this.activeCamera,
       cameras: this.cameras.map((c) => ({ ...c, active: c.id === this.activeId })),
@@ -187,6 +187,44 @@ export class CameraSession extends EventTarget {
       void this.refresh();
     });
     this.changed();
+    void this.probeControls(id);
+  }
+
+  /**
+   * Many cheap UVC cameras list controls (brightness, sharpness...) that they accept and ignore. Nudge
+   * each numeric control once, see whether the reading really moves, and put it back. Controls that
+   * do nothing are flagged so the UI can hide them and agents are not misled.
+   */
+  private async probeControls(id: string): Promise<void> {
+    const track = this.track;
+    if (!track) return;
+    const names = this.controls
+      .filter((c) => c.range && typeof c.value === 'number' && !MODE_FOR[c.name] && !this.unresponsive.has(c.name))
+      .map((c) => c.name);
+    for (const name of names) {
+      if (this.activeId !== id || this.track !== track) return;
+      const c = this.controls.find((x) => x.name === name);
+      if (!c?.range || typeof c.value !== 'number') continue;
+      const original = c.value;
+      const step = c.range.step || 1;
+      const delta = Math.max(step, Math.round(((c.range.max - c.range.min) / 10 / step)) * step);
+      const target = original + delta <= c.range.max ? original + delta : original - delta;
+      let moved = false;
+      try {
+        await track.applyConstraints({ advanced: [{ [name]: target } as MediaTrackConstraintSet] });
+        await new Promise((r) => setTimeout(r, 120));
+        const now = (track.getSettings() as Record<string, unknown>)[name];
+        moved = typeof now === 'number' && Math.abs(now - original) >= step / 2;
+      } catch {
+        moved = false;
+      }
+      await track.applyConstraints({ advanced: [{ [name]: original } as MediaTrackConstraintSet] }).catch(() => undefined);
+      if (!moved) this.unresponsive.add(name);
+    }
+    if (this.activeId === id) {
+      this.readTrack();
+      this.changed();
+    }
   }
 
   /** Called on a timer: if another app had the camera, take it as soon as it is free. */

@@ -12,10 +12,16 @@ describe('SettingsStore', () => {
     const dir = await mkdtemp(join(tmpdir(), 'electroscope-store-'));
     const store = SettingsStore.at(dir);
     expect(await store.load()).toEqual(DEFAULT_SETTINGS);
-    await store.patch({ port: 5555, claudeAccess: false });
+    await store.patch({ port: 5555, network: false });
 
     const again = SettingsStore.at(dir);
-    expect(await again.load()).toMatchObject({ port: 5555, claudeAccess: false, theme: 'system' });
+    expect(await again.load()).toMatchObject({ port: 5555, network: false, theme: 'system' });
+
+    // Settings written by older versions carry keys that no longer exist; they are dropped.
+    await writeFile(join(dir, 'settings.json'), JSON.stringify({ port: 7000, claudeAccess: false }));
+    const migrated = await SettingsStore.at(dir).load();
+    expect(migrated.port).toBe(7000);
+    expect(migrated).not.toHaveProperty('claudeAccess');
 
     await writeFile(join(dir, 'settings.json'), '{not json');
     expect(await SettingsStore.at(dir).load()).toEqual(DEFAULT_SETTINGS);
