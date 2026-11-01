@@ -276,6 +276,12 @@ async function switchCamera(id: string): Promise<void> {
 }
 
 // ---------- the stage ----------
+/** True when the stage is showing the live frame rather than one of the waiting panels. */
+function showingFrame(): boolean {
+  return session.activeId !== null && session.width > 0;
+}
+
+
 /** Counts down to the next automatic reconnect, so "it retries" is something you can watch. */
 let nextRetryAt = 0;
 let retryAttempt = 0;
@@ -294,7 +300,8 @@ function renderHud(): void {
   live.classList.toggle('paused', viewer.frozen);
   live.classList.toggle('stalled', !signal);
   live.lastChild!.textContent = viewer.frozen ? 'FROZEN' : signal ? 'LIVE' : 'NO SIGNAL';
-  $('no-signal').hidden = signal || !session.activeId || session.opening;
+  // Shown exactly when the picture is on screen but nothing is arriving in it.
+  $('no-signal').hidden = signal || !showingFrame();
   const zoom = $('hud-zoom');
   zoom.hidden = viewer.zoom <= 1.001;
   zoom.textContent = `${Math.round(viewer.zoom * 100)}%`;
@@ -347,7 +354,7 @@ function renderFocus(): void {
  * where the human can do something about it, what to do.
  */
 function renderStageState(): void {
-  const has = session.activeId !== null && session.width > 0;
+  const has = showingFrame();
   $('frame').hidden = !has;
   // The readouts belong to a picture; with no picture they would be describing nothing.
   $('hud-tl').hidden = !has;

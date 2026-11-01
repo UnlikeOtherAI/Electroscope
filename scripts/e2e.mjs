@@ -243,18 +243,21 @@ await step('annotate draws coloured marks on the live view and in captures on re
 
 await step('marks follow a zoomed region capture', async () => {
   const region = { x: 0.4, y: 0.4, width: 0.2, height: 0.2 };
+  // An opaque fill, so the assertion is about where the mark lands rather than about two
+  // separately captured frames of a moving scene agreeing on their background.
+  await call('annotate', { annotations: [{ id: 'ring', type: 'circle', x: 0.5, y: 0.5, radius: 0.12, color: '#ff00ff', thickness: 8, fill: 'rgb(255,0,255)' }] });
   const marked = images(await call('capture_snapshot', { region, max_width: 1000, include_annotations: true }))[0];
   const clean = images(await call('capture_snapshot', { region, max_width: 1000 }))[0];
   await save('annotated-zoom', marked);
-  // Circle centre (0.5,0.5), radius 0.12 of frame width: the whole 0.4..0.6 window lies inside its
-  // translucent magenta fill, so red and blue rise against a clean capture of the same area.
+  // Circle centre (0.5,0.5), radius 0.12 of frame width: the whole 0.4..0.6 window lies inside it,
+  // so every pixel of this crop is the fill, and the clean capture of the same area is not.
   const p = await pixel(marked, 0.5, 0.3);
   const q = await pixel(clean, 0.5, 0.3);
   console.log(`       inside-ring pixel marked=${p} clean=${q}`);
-  // Magenta raises red/blue relative to green. Compare that colour shift rather than demanding
-  // an exact increase in each channel across two different live frames (sensor noise/JPEG).
-  const magenta = ([r, g, b]) => r + b - 2 * g;
-  assert.ok(magenta(p) > magenta(q) + 30, `fill tint expected inside the ring, got ${p} vs ${q}`);
+  assert.ok(p[0] > 200 && p[2] > 200 && p[1] < 90, `expected the fill to cover this crop, got ${p}`);
+  assert.ok(!(q[0] > 200 && q[2] > 200 && q[1] < 90), 'a clean capture must not contain the fill');
+  // Put the translucent fill back for the tests that follow.
+  await call('annotate', { annotations: [{ id: 'ring', type: 'circle', x: 0.5, y: 0.5, radius: 0.12, color: '#ff00ff', thickness: 8, label: 'check this', fill: 'rgba(255,0,255,0.12)' }] });
 });
 
 await step('clear_annotations removes some, then all', async () => {
