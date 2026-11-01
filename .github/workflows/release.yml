@@ -136,12 +136,13 @@ jobs:
           ELECTROSCOPE_EXE="$app/Contents/MacOS/Electroscope" node scripts/e2e.mjs --fake
       - name: Verify the DMG
         run: |
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg-test" release/Electroscope-macOS-arm64.dmg
-          app="$RUNNER_TEMP/dmg-test/Electroscope.app"
+          hdiutil attach -nobrowse -readonly -plist release/Electroscope-macOS-arm64.dmg > "$RUNNER_TEMP/dmg-mount.plist"
+          volume="$(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1], "rb")); print(next(e["mount-point"] for e in p["system-entities"] if e.get("mount-point")))' "$RUNNER_TEMP/dmg-mount.plist")"
+          trap 'hdiutil detach "$volume"' EXIT
+          app="$volume/Electroscope.app"
           codesign --verify --strict --deep "$app"
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=4 "$app"
-          hdiutil detach "$RUNNER_TEMP/dmg-test"
       - name: Remove temporary notarization key
         if: always()
         run: rm -f "$RUNNER_TEMP/notary.p8"
