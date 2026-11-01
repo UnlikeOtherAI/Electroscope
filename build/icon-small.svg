@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Electroscope — small sizes</title>
+  <desc id="desc">A cyan and blue microscope lens on a navy tile, with circuit traces and one orange focal spark.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.25" y2="1">
+      <stop stop-color="#16263d"/><stop offset="1" stop-color="#08111f"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop stop-color="#b8efff"/><stop offset="0.5" stop-color="#4aa8ff"/>
+      <stop offset="1" stop-color="#2358d8"/>
+    </linearGradient>
+  </defs>
+  <!-- Optical small-size master: a bold ring and spark, no gloss or fine detail. -->
+  <rect width="1024" height="1024" rx="176" fill="url(#tile)"/>
+  <circle cx="512" cy="512" r="384" fill="url(#ring)"/>
+  <circle cx="512" cy="512" r="280" fill="#0c2440"/>
+  <!-- Exactly two broad, subdued traces; the warm centre stays dominant. -->
+  <g fill="none" stroke="#7fe0ff" stroke-opacity="0.65" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M290 512 H370"/>
+    <path d="M654 512 H684 L728 468"/>
+  </g>
+  <circle cx="512" cy="512" r="78" fill="#ff8a65"/>
+</svg>

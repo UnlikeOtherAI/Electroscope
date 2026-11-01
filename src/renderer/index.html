@@ -9,99 +9,211 @@
 </head>
 <body>
   <div id="app">
+    <!-- The window's own title bar: the caption buttons sit in it, and so does what is worth
+         knowing at a glance — what you are looking at, and who else is looking. -->
     <header class="titlebar">
-      <div class="brand"><span id="logo"></span><span class="brand-name">Electroscope</span></div>
-      <div class="titlebar-center">
-        <code id="address" class="address" title="MCP endpoint">starting…</code>
-        <button id="copy-prompt" class="btn primary" type="button" disabled></button>
+      <div class="tb-brand">
+        <span id="logo" class="logo"></span>
+        <span class="tb-titles">
+          <span class="tb-name">Electroscope</span>
+          <span class="tb-sub" id="tb-subtitle">Starting…</span>
+        </span>
       </div>
-      <div class="titlebar-actions"><button id="open-settings" class="icon-btn" type="button" title="Settings"></button></div>
+
+      <div class="tb-actions">
+        <button id="status-pill" class="pill" type="button" aria-label="Connection status">
+          <span class="pill-dot" id="status-dot"></span>
+          <span id="status-text">Starting…</span>
+        </button>
+        <button id="tb-save" class="btn primary" type="button" title="Save a full-resolution photo (⌘S)"></button>
+        <button id="open-settings" class="icon-btn quiet" type="button" title="Settings (⌘,)" aria-label="Settings"></button>
+      </div>
     </header>
 
+    <!-- Sources, and what is happening to them. -->
     <aside class="rail rail-left">
-      <section class="card">
-        <div class="card-head"><h2>Cameras</h2><button id="refresh" class="icon-btn small" type="button" title="Rescan cameras"></button></div>
-        <ul id="camera-list" class="camera-list"></ul>
+      <section class="section">
+        <div class="section-head">
+          <h2>Cameras</h2>
+          <span class="count" id="camera-count"></span>
+          <button id="refresh" class="icon-btn small quiet" type="button" title="Rescan cameras (⌘⇧N)" aria-label="Rescan cameras"></button>
+        </div>
+        <ul id="camera-list" class="rows"></ul>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>Connection</h2><span id="lock-hint" class="count"></span></div>
+        <p class="status-line"><span class="pill-dot" id="conn-dot"></span><span id="conn-text">Starting the MCP server…</span></p>
+        <div class="address-row">
+          <code id="address" class="address" title="MCP endpoint">starting…</code>
+          <button id="copy-address" class="icon-btn small quiet" type="button" title="Copy the address" aria-label="Copy the address"></button>
+        </div>
+        <button id="copy-prompt" class="btn primary wide" type="button" disabled></button>
+        <p class="hint">Gives your agent a live view of this camera.</p>
+        <ul id="agent-list" class="rows tight"></ul>
+      </section>
+
+      <section class="section grow">
+        <div class="section-head"><h2>Activity</h2><span class="count live-label" id="activity-live"></span></div>
+        <ul id="activity-list" class="rows tight"></ul>
       </section>
     </aside>
 
-    <main class="center">
-      <div class="stage" id="stage">
+    <!-- The picture, edge to edge, with the chrome floating over it. -->
+    <main class="stage" id="stage">
+      <div class="stage-area" id="stage-area">
         <div class="frame" id="frame" hidden>
           <div class="zoomer" id="zoomer"><video id="video" muted playsinline autoplay></video></div>
           <div class="overlay overlay-grid" hidden></div>
           <div class="overlay overlay-cross" hidden></div>
           <canvas class="marks"></canvas>
-          <div class="hud hud-tl"><span id="hud-cam">—</span><span class="sep"></span><span id="hud-res">—</span><span class="sep"></span><span id="hud-fps">—</span></div>
-          <div class="hud hud-bl focus-meter" title="Live sharpness. Turn the focus ring until this peaks."><span class="label">Focus</span><div class="bar"><i id="focus-bar"></i></div><span id="focus-val">—</span></div>
+
+          <div class="hud hud-tl">
+            <span class="live" id="hud-live"><i></i><span>LIVE</span></span>
+            <span class="sep"></span><span id="hud-cam">—</span>
+            <span class="sep"></span><span id="hud-res">—</span>
+            <span class="sep"></span><span id="hud-fps">—</span>
+          </div>
+          <div class="agent-flag" id="agent-flag" hidden></div>
+          <div class="hud hud-bl focus-meter" title="Live sharpness. Turn the focus ring until this peaks.">
+            <span class="label">Focus</span><div class="bar"><i id="focus-bar"></i></div><span id="focus-val">—</span>
+          </div>
           <div class="hud hud-br" id="hud-zoom" hidden></div>
+          <div class="no-signal" id="no-signal" hidden>
+            <span class="spinner"></span>
+            <span>Connected, but this camera has not sent a frame yet. Check its light and focus ring.</span>
+          </div>
         </div>
-        <div class="empty" id="empty" hidden>
+
+        <!-- One panel for every reason there is nothing to look at yet. -->
+        <div class="stage-state" id="empty" hidden>
           <div class="empty-art" id="empty-art"></div>
           <h3 id="empty-title">No camera</h3>
           <p id="empty-text"></p>
-          <button id="empty-retry" class="btn primary" type="button">Try again</button>
+          <button id="empty-retry" class="btn" type="button">Try again</button>
         </div>
       </div>
 
+      <div class="stage-flash" id="stage-flash" aria-hidden="true"></div>
+
+      <p class="tool-hint" id="hint-text" hidden></p>
+
       <div class="toolbar" role="toolbar" aria-label="Viewer tools">
-        <div class="group">
-          <button id="tb-zoom-out" class="icon-btn" type="button" title="Zoom out"></button>
-          <button id="tb-zoom-reset" class="chip-btn" type="button" title="Reset zoom">100%</button>
-          <button id="tb-zoom-in" class="icon-btn" type="button" title="Zoom in"></button>
+        <div class="group" aria-label="Zoom">
+          <button id="tb-zoom-out" class="icon-btn" type="button" title="Zoom out (⌘−)" aria-label="Zoom out"></button>
+          <button id="tb-zoom-reset" class="chip-btn" type="button" title="Actual size (⌘0)">100%</button>
+          <button id="tb-zoom-in" class="icon-btn" type="button" title="Zoom in (⌘+)" aria-label="Zoom in"></button>
         </div>
-        <div class="group">
-          <button id="tb-grid" class="icon-btn toggle" type="button" title="Grid"></button>
-          <button id="tb-cross" class="icon-btn toggle" type="button" title="Crosshair"></button>
-          <button id="tb-freeze" class="icon-btn toggle" type="button" title="Freeze view (Space)"></button>
+        <div class="group" aria-label="Overlays">
+          <button id="tb-grid" class="icon-btn toggle" type="button" title="Grid (⌘G)" aria-label="Grid"></button>
+          <button id="tb-cross" class="icon-btn toggle" type="button" title="Crosshair (⌘K)" aria-label="Crosshair"></button>
+          <button id="tb-freeze" class="icon-btn toggle" type="button" title="Freeze the picture (Space)" aria-label="Freeze the picture"></button>
         </div>
-        <div class="group" role="group" aria-label="Draw">
-          <button id="tool-circle" class="icon-btn toggle" type="button" title="Draw a circle: drag from the centre"></button>
-          <button id="tool-crosshair" class="icon-btn toggle" type="button" title="Place a crosshair: click"></button>
-          <button id="tool-rect" class="icon-btn toggle" type="button" title="Draw a rectangle: drag"></button>
-          <button id="tool-arrow" class="icon-btn toggle" type="button" title="Draw an arrow: drag from the tail to the point"></button>
-          <button id="tool-text" class="icon-btn toggle" type="button" title="Add text: click"></button>
-          <input id="draw-color" class="color-input" type="color" value="#ff3b30" title="Colour for new marks" />
-          <button id="tb-clear-all" class="btn" type="button" title="Remove every mark (Ctrl+Z removes the last)" disabled>Clear all</button>
+        <div class="group" role="group" aria-label="Annotate">
+          <button id="tool-circle" class="icon-btn toggle" type="button" title="Circle — drag from the centre" aria-label="Circle"></button>
+          <button id="tool-crosshair" class="icon-btn toggle" type="button" title="Crosshair — click to place" aria-label="Crosshair mark"></button>
+          <button id="tool-rect" class="icon-btn toggle" type="button" title="Rectangle — drag" aria-label="Rectangle"></button>
+          <button id="tool-arrow" class="icon-btn toggle" type="button" title="Arrow — drag from the tail to the point" aria-label="Arrow"></button>
+          <button id="tool-text" class="icon-btn toggle" type="button" title="Text — click to place" aria-label="Text"></button>
+          <label class="swatch" title="Colour for new marks">
+            <input id="draw-color" type="color" value="#ff3b30" aria-label="Colour for new marks" />
+            <span class="swatch-dot" id="swatch-dot"></span>
+          </label>
         </div>
-        <div class="spacer"></div>
-        <button id="tb-save" class="btn" type="button" title="Save a full-resolution photo to Pictures\Electroscope"></button>
       </div>
     </main>
 
+    <!-- Adjustments. -->
     <aside class="rail rail-right">
-      <section class="card">
-        <div class="card-head"><h2>Image</h2></div>
-        <div class="field">
-          <span class="field-label">Orientation</span>
+      <section class="section">
+        <div class="section-head"><h2>Image</h2></div>
+        <div class="row-inline">
+          <span class="row-label">Orientation</span>
           <div class="seg">
-            <button id="rot-ccw" class="icon-btn" type="button" title="Rotate counter-clockwise"></button>
-            <button id="rot-cw" class="icon-btn" type="button" title="Rotate clockwise"></button>
-            <button id="mirror" class="icon-btn toggle" type="button" title="Mirror"></button>
+            <button id="rot-ccw" class="icon-btn" type="button" title="Rotate counter-clockwise (⌘⇧R)" aria-label="Rotate counter-clockwise"></button>
+            <button id="rot-cw" class="icon-btn" type="button" title="Rotate clockwise (⌘R)" aria-label="Rotate clockwise"></button>
+            <button id="mirror" class="icon-btn toggle" type="button" title="Mirror (⌘M)" aria-label="Mirror"></button>
           </div>
         </div>
-        <div class="field">
-          <span class="field-label">Resolution</span>
-          <select id="resolution" class="select"></select>
+        <div class="row-inline">
+          <span class="row-label">Resolution</span>
+          <select id="resolution" class="select auto"></select>
         </div>
       </section>
-      <section class="card" id="controls-card" hidden>
-        <div class="card-head"><h2>Camera controls</h2></div>
+
+      <section class="section" id="adjust-card" hidden>
+        <div class="section-head">
+          <h2>Picture</h2>
+          <button id="adjust-reset" class="btn small quiet" type="button" title="Back to the camera's own picture" hidden></button>
+        </div>
+        <div id="adjustments" class="controls"></div>
+        <p class="hint">Electroscope's own, so they work on any camera. Captures get them; focus and exposure readings do not.</p>
+      </section>
+
+      <section class="section" id="controls-card" hidden>
+        <div class="section-head"><h2>Camera controls</h2></div>
+        <p class="note" id="controls-note" hidden></p>
         <div id="controls" class="controls"></div>
+      </section>
+
+      <section class="section grow" id="marks-card">
+        <div class="section-head">
+          <h2>Marks</h2>
+          <span class="count" id="marks-count"></span>
+          <button id="tb-undo" class="icon-btn small quiet" type="button" title="Remove the last mark (⌘Z)" aria-label="Undo" disabled></button>
+          <button id="tb-clear-all" class="btn small quiet danger" type="button" title="Remove every mark" disabled>Clear</button>
+        </div>
+        <ul id="marks-list" class="rows tight"></ul>
       </section>
     </aside>
   </div>
 
-  <dialog id="settings" class="dialog">
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
     <form method="dialog" id="settings-form">
-      <h3>Settings</h3>
-      <label class="field"><span class="field-label">MCP port</span><input id="set-port" class="input" type="number" min="1024" max="65535" /></label>
-      <label class="check"><input id="set-network" type="checkbox" /><span>Let other computers on the network connect</span></label>
-      <label class="field"><span class="field-label">Theme</span>
-        <select id="set-theme" class="select"><option value="system">Match system</option><option value="dark">Dark</option><option value="light">Light</option></select>
-      </label>
-      <p class="muted small">There is no password. Anyone who can reach this port can look through the camera and control it, so only enable network access on a network you trust.</p>
-      <div class="dialog-actions"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok">Save</button></div>
+      <header class="sheet-head"><h3 id="settings-title">Settings</h3></header>
+      <div class="sheet-body">
+        <nav class="sheet-rail" role="tablist" aria-label="Settings sections">
+          <button class="sheet-tab" type="button" data-pane="general" role="tab" aria-selected="true"><span class="ico" data-icon="settings"></span>General</button>
+          <button class="sheet-tab" type="button" data-pane="connection" role="tab" aria-selected="false"><span class="ico" data-icon="bolt"></span>Connection</button>
+          <button class="sheet-tab" type="button" data-pane="captures" role="tab" aria-selected="false"><span class="ico" data-icon="folder"></span>Captures</button>
+        </nav>
+
+        <div class="sheet-pane" data-pane="general">
+          <h4>General</h4>
+          <p class="pane-sub">How Electroscope looks on this computer.</p>
+          <div class="row">
+            <div class="row-text"><span class="row-title">Appearance</span><span class="row-note">Match the system, or pick one.</span></div>
+            <select id="set-theme" class="select auto"><option value="system">Match system</option><option value="dark">Dark</option><option value="light">Light</option></select>
+          </div>
+        </div>
+
+        <div class="sheet-pane" data-pane="connection" hidden>
+          <h4>Connection</h4>
+          <p class="pane-sub">How agents reach this microscope.</p>
+          <div class="row">
+            <div class="row-text"><span class="row-title">Let other computers connect</span><span class="row-note">Off means only this computer can reach the server.</span></div>
+            <label class="switch"><input id="set-network" type="checkbox" /><span class="track"></span></label>
+          </div>
+          <div class="row">
+            <div class="row-text"><span class="row-title">Port</span><span class="row-note" id="port-note">1024–65535. The server restarts when you change it.</span></div>
+            <input id="set-port" class="input narrow" type="number" min="1024" max="65535" inputmode="numeric" />
+          </div>
+          <p class="callout"><span class="ico" data-icon="shield"></span>There is no password. Anyone who can reach this port can look through the camera and control it, so only allow network access on a network you trust.</p>
+        </div>
+
+        <div class="sheet-pane" data-pane="captures" hidden>
+          <h4>Captures</h4>
+          <p class="pane-sub">Where photos and agent frames are kept.</p>
+          <div class="row">
+            <div class="row-text"><span class="row-title">Photos folder</span><span class="row-note">Pictures › Electroscope</span></div>
+            <button id="open-photos" class="btn small" type="button">Open</button>
+          </div>
+        </div>
+      </div>
+      <footer class="sheet-foot">
+        <span class="muted small" id="settings-saved">Changes save as you make them</span>
+        <button class="btn primary" value="ok">Done</button>
+      </footer>
     </form>
   </dialog>
 

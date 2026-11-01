@@ -6,6 +6,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
 import { AppHub } from '../src/main/hub.js';
+import type { ActivityEvent } from '../src/shared/types.js';
 import { CaptureStore } from '../src/main/captures.js';
 import { startMcpHttp, type McpHttp } from '../src/main/mcp/http.js';
 import { createMcpServer, type CameraBackend } from '../src/main/mcp/tools.js';
@@ -25,7 +26,9 @@ const reset = () => {
     fps: 30,
     orientation: { rotation: 0, mirror: false },
     focusScore: 120,
+    controlsNote: '',
     maxResolution: { width: 1920, height: 1080 },
+    adjustments: { brightness: 1, contrast: 1, saturation: 1 },
     controls: [
       { name: 'zoom', value: 100, range: { min: 100, max: 500, step: 1 } },
       { name: 'focusMode', value: 'continuous', options: ['manual', 'continuous'] },
@@ -71,13 +74,17 @@ const backend: CameraBackend = {
       case 'setView':
         state = { ...state, view: { ...state.view, ...(args as object) } };
         return out(state);
+      case 'setAdjustments':
+        state = { ...state, adjustments: { ...state.adjustments, ...(args as object) } };
+        return out(state);
       case 'setAnnotations': {
         const a = args as Parameters<RendererCommands['setAnnotations']>[0];
         let list = [...state.annotations];
         if (a.clear) list = [];
         if (a.remove) list = list.filter((m) => !a.remove!.includes(m.id));
         for (const u of a.upsert ?? []) {
-          const m = { id: u.id ?? `m${list.length + 1}`, color: '#ff3b30', thickness: 3, ...u } as Annotation;
+          // The real viewer stamps the author the same way.
+          const m = { id: u.id ?? `m${list.length + 1}`, color: '#ff3b30', thickness: 3, ...u, author: a.author ?? 'You' } as Annotation;
           const at = list.findIndex((x) => x.id === m.id);
           if (at >= 0) list[at] = m;
           else list.push(m);
@@ -108,14 +115,19 @@ const backend: CameraBackend = {
   },
 };
 
+const activity: ActivityEvent[] = [];
 let http: McpHttp;
 let client: Client;
 let dir: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'electroscope-test-'));
-  const hub = new AppHub(new CaptureStore(join(dir, 'c')), new CaptureStore(join(dir, 'p')));
-  http = await startMcpHttp({ port: 0, version: 'test', createServer: () => createMcpServer(backend, hub, 'test') });
+  const hub = new AppHub(new CaptureStore(join(dir, 'c')), new CaptureStore(join(dir, 'p')), (e) => activity.push(e));
+  http = await startMcpHttp({
+    port: 0,
+    version: 'test',
+    createServer: (client) => createMcpServer(backend, hub, 'test', client),
+  });
   client = new Client({ name: 'vitest', version: '0.0.1' });
   await client.connect(new StreamableHTTPClientTransport(new URL(http.url)));
 });
@@ -142,6 +154,7 @@ describe('MCP tools', () => {
       'save_photo',
       'select_camera',
       'set_camera_controls',
+      'set_image_adjustments',
       'set_orientation',
       'set_view',
     ]);
@@ -310,6 +323,44 @@ describe('HTTP transport safety', () => {
   it('requires initialize before anything else and rejects unknown sessions', async () => {
     expect(await post({})).toBe(400);
     expect(await post({ 'mcp-session-id': 'nope' })).toBe(404);
+  });
+
+  it('set_image_adjustments changes the picture and refuses values outside its range', async () => {
+    const ok = json(await client.callTool({ name: 'set_image_adjustments', arguments: { contrast: 1.4, brightness: 0.8 } }));
+    expect(ok.image_adjustments).toMatchObject({ contrast: 1.4, brightness: 0.8, saturation: 1 });
+    const bad = await client
+      .callTool({ name: 'set_image_adjustments', arguments: { contrast: 9 } })
+      .catch((e: Error) => ({ isError: true, content: [{ type: 'text', text: e.message }] }));
+    expect((bad as { isError?: boolean }).isError).toBe(true);
+    await client.callTool({ name: 'set_image_adjustments', arguments: { contrast: 1, brightness: 1 } });
+  });
+
+  it('tells the window who did what, with a picture when there is one', async () => {
+    activity.length = 0;
+    await client.callTool({ name: 'get_status', arguments: {} });
+    await client.callTool({ name: 'capture_snapshot', arguments: { max_width: 320 } });
+    expect(activity.map((e) => e.tool)).toEqual(['get_status', 'capture_snapshot']);
+    expect(activity.every((e) => e.client === 'vitest' && e.ok && e.id && e.at)).toBe(true);
+    expect(activity[0]!.summary).toBe('Checked the microscope');
+    expect(activity[1]!.summary).toBe('Captured a snapshot');
+  });
+
+  it('reports a failed call rather than staying silent', async () => {
+    activity.length = 0;
+    await client.callTool({ name: 'set_camera_controls', arguments: { controls: { warpDrive: 1 } } });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({ tool: 'set_camera_controls', ok: false });
+  });
+
+  it('points an agent at the adjustments when the camera has no controls of its own', async () => {
+    const r = await client.callTool({ name: 'set_camera_controls', arguments: { controls: { warpDrive: 1 } } });
+    expect(json(r).try_instead).toMatch(/set_image_adjustments/);
+  });
+
+  it('names the marks it draws after the agent that drew them', async () => {
+    await client.callTool({ name: 'annotate', arguments: { annotations: [{ type: 'circle', x: 0.5, y: 0.5 }] } });
+    expect(json(await client.callTool({ name: 'get_status', arguments: {} })).annotations[0].author).toBe('vitest');
+    await client.callTool({ name: 'clear_annotations', arguments: {} });
   });
 
   it('serves /health and 404s other paths', async () => {

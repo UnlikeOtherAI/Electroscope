@@ -15,7 +15,8 @@ export interface McpHttpOptions {
   /** Extra DNS names this computer answers to (its own hostname is always allowed). */
   names?: string[];
   version: string;
-  createServer: () => McpServer;
+  /** Called once per agent session; the ClientInfo is live and gains its id once the session starts. */
+  createServer: (client: ClientInfo) => McpServer;
   onClientsChanged?: (clients: ClientInfo[]) => void;
   /** Sessions idle for longer than this are dropped. */
   sessionTtlMs?: number;
@@ -152,7 +153,7 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
           connectedAt: now,
           lastSeen: now,
         };
-        const server = opts.createServer();
+        const server = opts.createServer(info);
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
@@ -166,6 +167,17 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
         };
         await server.connect(transport);
         session = { transport, server, info };
+        try {
+          session.info.lastSeen = new Date().toISOString();
+          await session.transport.handleRequest(req, res, body);
+        } catch (e) {
+          // The session id is only assigned once initialize succeeds; without it `drop` cannot
+          // find this server later, so close it here rather than leak it for the app's lifetime.
+          if (!info.id) await server.close().catch(() => undefined);
+          throw e;
+        }
+        if (!info.id) await server.close().catch(() => undefined);
+        return;
       }
       session.info.lastSeen = new Date().toISOString();
       await session.transport.handleRequest(req, res, body);

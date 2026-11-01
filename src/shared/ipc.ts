@@ -4,6 +4,7 @@ export const IPC = {
   getSettings: 'settings:get',
   patchSettings: 'settings:patch',
   getServerInfo: 'server:info',
+  getClients: 'clients:get',
   savePhoto: 'photo:save',
   openPhotos: 'photo:open-folder',
   rendererReady: 'renderer:ready',
@@ -12,4 +13,7 @@ export const IPC = {
   command: 'command:run',
   serverInfo: 'server:info:update',
   settingsChanged: 'settings:changed',
+  clientsChanged: 'clients:changed',
+  activity: 'activity:event',
+  menu: 'menu:action',
 } as const;

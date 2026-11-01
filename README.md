@@ -29,6 +29,7 @@ Instead of “the little component on the left,” your agent can circle the com
 - **Make the next probe location clear.** Circles, arrows, crosshairs, boxes, and text turn “measure here” into a specific place on the board.
 - **Keep the detail.** The agent can request a full-resolution crop, follow your zoomed view, or take a sequence of stills.
 - **Stay in control.** Zoom, pan, rotate, mirror, freeze, add a grid, draw your own marks, and save photos while the camera stays open.
+- **See what the agent is doing.** Connected agents are listed by name, and a running feed shows what each one did, with a thumbnail of the frames it took.
 - **Work across your bench.** Run the microscope on one computer and connect an agent from another computer on the same trusted network.
 
 ![Electroscope on macOS, zoomed into a circuit board with a grid and crosshair](docs/images/microscope-zoom.png)
@@ -62,13 +63,19 @@ claude mcp add --transport http electroscope http://<microscope-computer-ip>:782
 
 For Codex or another MCP client, add the **Streamable HTTP MCP URL** shown in Electroscope’s title bar. Use the displayed URL: the port can change if the default is busy.
 
-Agents can take snapshots and sequences, annotate the image, adjust the on-screen view, choose a camera, save photos, and change hardware controls where the camera supports them. [Read the full tool reference →](docs/mcp.md)
+Agents can take snapshots and sequences, annotate the image, adjust the on-screen view, choose a camera, save photos, brighten or add contrast to the picture, and change hardware controls where the camera supports them. [Read the full tool reference →](docs/mcp.md)
 
 ## Your camera, your network
 
 Electroscope serves the camera from your computer. Network access is on by default and has no password, so use it on a trusted network. To keep access on the same computer, turn off **Let other computers on the network connect** in Settings.
 
-If another app has the microscope open, close that app; Electroscope retries automatically. Camera sliders appear only for controls the camera actually responds to. Use the microscope’s physical focus ring when it has no software focus control.
+If another app has the microscope open, close that app; Electroscope retries automatically.
+
+**Picture** sliders — brightness, contrast, saturation — are Electroscope’s own processing, so they work on any camera on either platform, and captures get them too.
+
+**Camera controls** appear only for things the camera and the operating system really support, which is often nothing at all: macOS exposes at most zoom, pan and tilt over USB video, and many inexpensive UVC cameras accept settings and ignore them. Electroscope tests each control when the camera opens, hides the ones that do nothing, and says why when there are none. [What a USB microscope can actually do →](docs/camera-controls.md)
+
+Focus on these microscopes is mechanical: turn the ring until the live focus meter peaks.
 
 ## Contribute
 

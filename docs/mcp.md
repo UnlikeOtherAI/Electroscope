@@ -26,13 +26,14 @@ Positions are normalised **0..1 in the oriented frame**: `x` across, `y` down, `
 
 | Tool | What it does |
 | --- | --- |
-| `get_status` | Active camera, resolution, fps, orientation, view (zoom, centre, overlays, colours, frozen), current marks, live focus score, and every camera control with its range. Controls marked `responsive: false` are accepted by the camera but do nothing. |
+| `get_status` | Active camera, resolution, fps, orientation, view (zoom, centre, overlays, colours, frozen), current marks, live focus score, the picture adjustments, and every camera control with its range. Controls marked `responsive: false` are accepted by the camera but do nothing. When there are none, `controls_note` says why. |
 | `list_cameras` | Rescan and list every camera. |
 | `select_camera` | Switch the live view to another camera, optionally at a resolution. Clears marks. |
 | `capture_snapshot` | One still image plus metrics and hints. |
 | `capture_sequence` | 2-6 frames at an interval (default `max_width` 800). |
 | `save_photo` | Save a full-resolution PNG in `Pictures/Electroscope` on the computer running Electroscope; returns the path, no image. |
-| `set_camera_controls` | Set focus, zoom, exposure, brightness and so on. Setting a manual value (`focusDistance`, `exposureTime`, `colorTemperature`) switches the matching mode to manual first. Anything the camera ignores comes back in `rejected`. |
+| `set_camera_controls` | Set focus, zoom, exposure, brightness and so on — **only where the camera and platform really support it**, which is often nowhere; see [camera controls](camera-controls.md). Setting a manual value (`focusDistance`, `exposureTime`, `colorTemperature`) switches the matching mode to manual first. Anything the camera ignores comes back in `rejected`. |
+| `set_image_adjustments` | Brightness, contrast and saturation, done by Electroscope rather than the camera, so they work everywhere. 1 is the camera's own picture; 0.25-2.5 allowed. Changes the window and every capture, but not `focus_score` or `brightness` in capture metadata. |
 | `set_orientation` | Rotate 0/90/180/270 and mirror. Affects the window and captures. Clears marks. |
 | `set_view` | Zoom (1-12), pan (`center_x`, `center_y`), `grid`, `crosshair`, `grid_color`, `crosshair_color` (any CSS colour), `frozen`. Captures always read the live camera, even while frozen. |
 | `annotate` | Draw marks on the live view (below). |
@@ -49,6 +50,8 @@ Positions are normalised **0..1 in the oriented frame**: `x` across, `y` down, `
 | `region` | whole frame | `{x, y, width, height}`. Taken from the full-resolution frame, so a small region is a real close-up, not an upscale. |
 | `follow_user_view` | false | Capture exactly the area the human has zoomed and panned to. Overrides `region`. |
 | `include_annotations` | false | Burn the current marks into the image. |
+
+Captures carry the picture adjustments set with `set_image_adjustments`; the metrics below are measured before them, so they always describe what the sensor sent.
 
 The text result carries `focus_score` (variance of the Laplacian on a normalised copy; compare only within one scene), `brightness` (0-255), `overexposed_fraction`, `underexposed_fraction`, `source_resolution`, `region`, `orientation`, `captured_at`, `saved_to`, and `hints` such as blown highlights, a dark image, or very low focus.
 

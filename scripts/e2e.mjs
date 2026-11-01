@@ -97,7 +97,7 @@ await step('Copy prompt puts the real IP, port and tools on the clipboard', asyn
   const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
   await writeFile(join(outDir, 'copied-prompt.txt'), clip);
   const url = new URL(endpoint);
-  assert.ok(clip.includes(`${url.hostname}:${port}/mcp`), 'prompt lacks the address shown in the title bar');
+  assert.ok(clip.includes(`${url.hostname}:${port}/mcp`), 'prompt lacks the address the window shows');
   assert.ok(clip.includes('claude mcp add --transport http electroscope'));
   for (const t of ['capture_snapshot', 'annotate', 'set_view', 'save_photo']) assert.ok(clip.includes(t), t);
 });
@@ -380,6 +380,38 @@ await step('save_photo writes a full-resolution file and returns its path', asyn
   const meta = await sharp(out.saved_to).metadata();
   assert.equal(meta.width, out.width);
   console.log(`       ${out.saved_to} ${meta.width}x${meta.height}`);
+});
+
+await step('the window shows the agent and what it has been doing', async () => {
+  await call('capture_snapshot', { max_width: 320 });
+  await page.waitForTimeout(600);
+  const shown = await page.evaluate(() => ({
+    agents: [...document.querySelectorAll('#agent-list .agent-item .name')].map((e) => e.textContent),
+    status: document.getElementById('status-text').textContent,
+    activity: [...document.querySelectorAll('#activity-list .activity-item .name')].map((e) => e.textContent),
+    thumbs: document.querySelectorAll('#activity-list img.thumb').length,
+  }));
+  console.log(`       agents: ${shown.agents.join(', ')} | status: ${shown.status} | ${shown.activity.length} entries, ${shown.thumbs} with a picture`);
+  assert.ok(shown.agents.includes('electroscope-e2e'), `agent not listed: ${JSON.stringify(shown.agents)}`);
+  assert.match(shown.status, /1 agent/);
+  assert.ok(shown.activity.some((t) => t.includes('captured a snapshot')), `no capture in the feed: ${JSON.stringify(shown.activity)}`);
+  assert.ok(shown.thumbs > 0, 'captures should show a thumbnail of what the agent saw');
+});
+
+await step('picture adjustments reach the window and the captured image', async () => {
+  const dark = await pixel(images(await call('capture_snapshot', { max_width: 320 }))[0], 0.5, 0.5);
+  const set = json(await call('set_image_adjustments', { brightness: 1.8 }));
+  assert.equal(set.image_adjustments.brightness, 1.8);
+  await page.waitForTimeout(400);
+  const filter = await page.evaluate(() => document.getElementById('zoomer').style.filter);
+  assert.match(filter, /brightness\(1\.8\)/, `live view not adjusted: "${filter}"`);
+  const bright = await pixel(images(await call('capture_snapshot', { max_width: 320 }))[0], 0.5, 0.5);
+  const lum = ([r, g, b]) => r + g + b;
+  console.log(`       centre pixel ${dark} -> ${bright}`);
+  assert.ok(lum(bright) > lum(dark) + 20, `capture should be brighter, got ${dark} -> ${bright}`);
+  const bad = await call('set_image_adjustments', { brightness: 9 }).catch((e) => ({ isError: true, content: [{ type: 'text', text: e.message }] }));
+  assert.ok(bad.isError, 'out-of-range brightness should be refused');
+  await call('set_image_adjustments', { brightness: 1 });
 });
 
 await step('there is no access switch: every tool keeps working', async () => {

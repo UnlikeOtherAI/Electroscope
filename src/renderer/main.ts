@@ -1,8 +1,19 @@
-import type { CameraControl, Orientation, RendererCommandName, ServerInfo, Settings } from '../shared/types.js';
+import type {
+  ActivityEvent,
+  Annotation,
+  CameraControl,
+  ClientInfo,
+  ImageAdjustments,
+  Orientation,
+  RendererCommandName,
+  ServerInfo,
+  Settings,
+} from '../shared/types.js';
+import { ADJUSTMENT_RANGE, NEUTRAL_ADJUSTMENTS, adjustmentFilter, isNeutral } from '../shared/types.js';
 import { buildAgentPrompt } from '../shared/prompt.js';
 import { CameraSession } from './camera.js';
 import { captureFrame, createCommands, type CommandContext } from './commands.js';
-import { icons } from './icons.js';
+import { icons, type IconName } from './icons.js';
 import { Viewer } from './viewer.js';
 
 const api = window.electroscope;
@@ -37,23 +48,66 @@ const PRESETS = [
   [640, 480],
 ] as const;
 
+const ADJUSTMENTS = [
+  { key: 'brightness', label: 'Brightness' },
+  { key: 'contrast', label: 'Contrast' },
+  { key: 'saturation', label: 'Saturation' },
+] as const;
+
+const MARK_ICON: Record<Annotation['type'], IconName> = {
+  circle: 'circle',
+  crosshair: 'plus',
+  rect: 'rect',
+  arrow: 'arrow',
+  text: 'text',
+};
+
 let settings: Settings;
 let serverInfo: ServerInfo = { running: false, port: 0, url: '', addresses: [], hostname: '', network: true };
+let clients: ClientInfo[] = [];
+let activity: ActivityEvent[] = [];
 let controlsSignature = '';
+let saving = false;
 
 const video = $<HTMLVideoElement>('video');
 const session = new CameraSession(video);
-const viewer = new Viewer($('stage'), $('frame'), $('zoomer'), video, session);
+const viewer = new Viewer($('stage-area'), $('frame'), $('zoomer'), video, session);
 
 // ---------- helpers ----------
-function toast(message: string, kind: 'info' | 'error' = 'info', ms = 4200): void {
-  const el = h('div', { class: `toast ${kind}`, textContent: message });
+function toast(message: string, kind: 'info' | 'error' = 'info', action?: { label: string; run: () => void }): void {
+  const el = h('div', { class: `toast ${kind}` }, h('span', { textContent: message }));
+  if (action) {
+    const b = h('button', { class: 'toast-action', type: 'button', textContent: action.label });
+    b.addEventListener('click', () => {
+      action.run();
+      el.remove();
+    });
+    el.append(b);
+  }
   $('toasts').append(el);
-  setTimeout(() => el.remove(), ms);
+  setTimeout(() => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 200);
+  }, kind === 'error' ? 7000 : 4200);
 }
 
 function humanize(name: string): string {
   return name.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
+/** "just now", "12s ago", "4 min ago" — rewritten on a timer so the list never goes stale. */
+function relTime(iso: string): string {
+  const secs = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (secs < 5) return 'just now';
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  return `${hours} h ago`;
+}
+
+function ico(name: IconName, cls = 'ico'): HTMLElement {
+  return h('span', { class: cls, innerHTML: icons[name] });
 }
 
 async function copy(text: string, what: string): Promise<void> {
@@ -69,6 +123,17 @@ async function copy(text: string, what: string): Promise<void> {
   toast(`${what} copied`);
 }
 
+/** Settings writes are fire-and-forget from the UI; a failure must still be visible. */
+function save(patch: Partial<Settings>): void {
+  void api
+    .patchSettings(patch)
+    .then((s) => {
+      settings = s;
+      applyTheme();
+    })
+    .catch((e: Error) => toast(`Could not save settings: ${e.message}`, 'error'));
+}
+
 // ---------- what agents' tool calls land on ----------
 const ctx: CommandContext = {
   session,
@@ -81,6 +146,13 @@ const ctx: CommandContext = {
     viewer.clearAnnotations();
     viewer.reset();
     viewer.layout();
+    session.changed();
+  },
+  async setAdjustments(cameraId: string, a: ImageAdjustments) {
+    const adjustments = { ...settings.adjustments, [cameraId]: a };
+    settings = await api.patchSettings({ adjustments });
+    session.adjustmentsByCamera = settings.adjustments;
+    applyLiveFilter();
     session.changed();
   },
   async rememberCamera(cameraId, size) {
@@ -102,9 +174,28 @@ api.onCommand(async ({ id, name, args }) => {
   }
 });
 
-// ---------- rendering ----------
+/**
+ * The window picks its own theme. Electron's nativeTheme.themeSource drives the native chrome but
+ * does not reliably reach prefers-color-scheme inside the page, so "Match system" is resolved here.
+ */
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme(): void {
+  const dark = settings.theme === 'system' ? systemDark.matches : settings.theme === 'dark';
+  document.documentElement.dataset['theme'] = dark ? 'dark' : 'light';
+}
+systemDark.addEventListener('change', () => {
+  if (settings?.theme === 'system') applyTheme();
+});
+
+/** The live view shows the adjustments for free; captures redo them on the real pixels. */
+function applyLiveFilter(): void {
+  $('zoomer').style.filter = adjustmentFilter(session.adjustments);
+}
+
+// ---------- cameras ----------
 function renderCameras(): void {
   const list = $('camera-list');
+  $('camera-count').textContent = session.cameras.length ? String(session.cameras.length) : '';
   list.replaceChildren();
   if (session.cameras.length === 0) {
     list.append(h('li', { class: 'list-empty', textContent: 'No cameras detected.' }));
@@ -113,13 +204,14 @@ function renderCameras(): void {
   for (const cam of session.cameras) {
     const active = cam.id === session.activeId;
     const btn = h('button', { class: `camera-item${active ? ' active' : ''}`, type: 'button' });
+    btn.setAttribute('aria-current', String(active));
     btn.append(
-      h('span', { class: 'ico', innerHTML: icons.camera }),
+      ico('camera'),
       h(
         'span',
         { class: 'meta' },
-        h('div', { class: 'name', textContent: cam.label, title: cam.label }),
-        h('div', { class: 'sub', textContent: active ? `${session.width}×${session.height}` : 'Click to switch' }),
+        h('span', { class: 'name', textContent: cam.label, title: cam.label }),
+        h('span', { class: 'sub', textContent: active ? `${session.width}×${session.height}` : 'Click to switch' }),
       ),
     );
     if (active) btn.append(h('span', { class: 'live-dot', title: 'Live' }));
@@ -133,19 +225,27 @@ function renderCameras(): void {
 async function switchCamera(id: string): Promise<void> {
   try {
     await session.open(id, settings.resolutions[id]);
-    settings = await api.patchSettings({ lastCameraId: id });
+    save({ lastCameraId: id });
     viewer.clearAnnotations();
     viewer.reset();
     viewer.layout();
+    applyLiveFilter();
   } catch (e) {
-    toast((e as Error).message, 'error', 7000);
+    toast((e as Error).message, 'error');
   }
 }
 
+// ---------- the stage ----------
 function renderHud(): void {
+  const signal = session.hasSignal;
   $('hud-cam').textContent = session.activeCamera?.label ?? '—';
   $('hud-res').textContent = session.width ? `${session.width}×${session.height}` : '—';
-  $('hud-fps').textContent = viewer.frozen ? 'Frozen' : session.fps ? `${session.fps} fps` : '—';
+  $('hud-fps').textContent = signal ? (session.fps ? `${session.fps} fps` : '…') : 'no frames yet';
+  const live = $('hud-live');
+  live.classList.toggle('paused', viewer.frozen);
+  live.classList.toggle('stalled', !signal);
+  live.lastChild!.textContent = viewer.frozen ? 'FROZEN' : signal ? 'LIVE' : 'NO SIGNAL';
+  $('no-signal').hidden = signal || !session.activeId || session.opening;
   const zoom = $('hud-zoom');
   zoom.hidden = viewer.zoom <= 1.001;
   zoom.textContent = `${Math.round(viewer.zoom * 100)}%`;
@@ -157,6 +257,7 @@ function renderFocus(): void {
   const score = session.focusScore;
   if (score === null) {
     $('focus-val').textContent = '—';
+    ($('focus-bar') as HTMLElement).style.width = '0%';
     return;
   }
   focusPeak = Math.max(score, focusPeak * 0.995);
@@ -164,18 +265,43 @@ function renderFocus(): void {
   $('focus-val').textContent = score >= 100 ? Math.round(score).toString() : score.toFixed(1);
 }
 
+/**
+ * One panel covers every reason there is nothing to look at. Each says what is happening and,
+ * where the human can do something about it, what to do.
+ */
 function renderStageState(): void {
   const has = session.activeId !== null && session.width > 0;
   $('frame').hidden = !has;
-  $('empty').hidden = has;
-  if (!has) {
-    const noCam = session.cameras.length === 0;
-    $('empty-art').innerHTML = icons.camera;
-    $('empty-title').textContent = noCam ? 'No camera found' : 'Camera unavailable';
-    $('empty-text').textContent =
-      session.error ?? (noCam ? 'Plug in your microscope and it will appear here.' : 'Pick a camera from the list.');
-  } else {
+  const panel = $('empty');
+  panel.hidden = has;
+  if (has) {
     viewer.layout();
+    return;
+  }
+
+  const retry = $<HTMLButtonElement>('empty-retry');
+  const setState = (icon: IconName | 'spinner', title: string, text: string, retryLabel?: string) => {
+    $('empty-art').replaceChildren(icon === 'spinner' ? h('span', { class: 'spinner lg' }) : ico(icon, 'ico'));
+    $('empty-title').textContent = title;
+    $('empty-text').textContent = text;
+    retry.hidden = !retryLabel;
+    if (retryLabel) retry.textContent = retryLabel;
+  };
+
+  if (session.opening) {
+    const name = session.cameras.find((c) => c.id === session.activeId)?.label ?? 'the camera';
+    setState('spinner', `Opening ${name}…`, 'Your live view will appear here in a moment.');
+  } else if (session.busy) {
+    setState(
+      'camera',
+      'This camera is in use',
+      'Another app has it. Close that app and Electroscope will pick it up by itself — or try now.',
+      'Try now',
+    );
+  } else if (session.cameras.length === 0) {
+    setState('plug', 'Connect your microscope', session.error ?? 'No camera found. Plug it in and it will appear here.', 'Scan again');
+  } else {
+    setState('camera', 'Camera unavailable', session.error ?? 'Pick a camera from the list on the left.', 'Try again');
   }
 }
 
@@ -201,10 +327,14 @@ function renderResolution(): void {
   sel.disabled = !session.activeId;
 }
 
+// ---------- camera controls ----------
 /** Only controls the camera has been seen to obey are shown; the rest would be fake sliders. */
 function renderControls(): void {
   const working = session.controls.filter((c) => c.responsive !== false);
-  $('controls-card').hidden = working.length === 0;
+  const note = session.controlsNote;
+  $('controls-card').hidden = working.length === 0 && !note;
+  $('controls-note').textContent = note;
+  $('controls-note').hidden = !note;
   const box = $('controls');
   const sig = JSON.stringify(working.map((c) => [c.name, c.range, c.options])) + session.activeId;
   if (sig !== controlsSignature) {
@@ -247,10 +377,6 @@ function controlRow(c: CameraControl): HTMLElement {
       seg.append(b);
     }
     row.append(seg);
-  } else {
-    const b = h('button', { class: 'chip-btn toggle-control', type: 'button', textContent: 'Off' });
-    b.addEventListener('click', () => void session.applyControls({ [c.name]: b.getAttribute('aria-pressed') !== 'true' }));
-    row.append(b);
   }
   return row;
 }
@@ -268,11 +394,81 @@ function syncControlValues(working: CameraControl[]): void {
     row.querySelectorAll<HTMLButtonElement>('.mode-seg button').forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset['value'] === c.value));
     });
-    const t = row.querySelector<HTMLButtonElement>('.toggle-control');
-    if (t) {
-      t.setAttribute('aria-pressed', String(Boolean(c.value)));
-      t.textContent = c.value ? 'On' : 'Off';
-    }
+  }
+}
+
+// ---------- picture adjustments ----------
+/** Electroscope's own, so they work on every camera — which on macOS is the only thing that does. */
+function buildAdjustments(): void {
+  const box = $('adjustments');
+  box.replaceChildren(
+    ...ADJUSTMENTS.map(({ key, label }) => {
+      const row = h('div', { class: 'control' });
+      row.dataset['adj'] = key;
+      const value = h('span', { class: 'v' });
+      row.append(h('div', { class: 'head' }, h('span', { textContent: label }), value));
+      const input = h('input', { type: 'range' });
+      input.min = String(ADJUSTMENT_RANGE.min);
+      input.max = String(ADJUSTMENT_RANGE.max);
+      input.step = String(ADJUSTMENT_RANGE.step);
+      input.setAttribute('aria-label', label);
+      input.addEventListener('input', () => {
+        const id = session.activeId;
+        if (!id) return;
+        const next = { ...session.adjustmentsFor(id), [key]: Number(input.value) };
+        session.adjustmentsByCamera = { ...session.adjustmentsByCamera, [id]: next };
+        applyLiveFilter();
+        renderAdjustments();
+        save({ adjustments: { ...settings.adjustments, [id]: next } });
+      });
+      row.append(input);
+      return row;
+    }),
+  );
+}
+
+function renderAdjustments(): void {
+  const a = session.adjustments;
+  $('adjust-card').hidden = !session.activeId;
+  for (const { key } of ADJUSTMENTS) {
+    const row = $('adjustments').querySelector<HTMLElement>(`[data-adj="${key}"]`);
+    if (!row) continue;
+    const input = row.querySelector<HTMLInputElement>('input');
+    const v = row.querySelector<HTMLElement>('.v');
+    if (input && document.activeElement !== input) input.value = String(a[key]);
+    if (v) v.textContent = `${Math.round(a[key] * 100)}%`;
+  }
+  $<HTMLButtonElement>('adjust-reset').hidden = isNeutral(a);
+}
+
+// ---------- marks ----------
+function renderMarks(): void {
+  const list = $('marks-list');
+  const marks = viewer.annotations;
+  $('marks-count').textContent = marks.length ? String(marks.length) : '';
+  $<HTMLButtonElement>('tb-clear-all').disabled = marks.length === 0;
+  $<HTMLButtonElement>('tb-undo').disabled = marks.length === 0;
+  list.replaceChildren();
+  if (marks.length === 0) {
+    list.append(h('li', { class: 'list-empty', textContent: 'Nothing drawn yet. Pick a tool below the picture, or let an agent point at something.' }));
+    return;
+  }
+  for (const m of marks) {
+    const swatch = h('span', { class: 'mark-swatch' });
+    swatch.style.setProperty('--c', m.color);
+    const title = m.type === 'text' ? (m.text ?? 'Text') : (m.label ?? humanize(m.type));
+    const row = h(
+      'li',
+      { class: 'mark-item' },
+      swatch,
+      ico(MARK_ICON[m.type], 'ico small'),
+      h('span', { class: 'meta' }, h('span', { class: 'name', textContent: title, title }), h('span', { class: 'sub', textContent: m.author ?? 'You' })),
+    );
+    const del = h('button', { class: 'icon-btn small quiet', type: 'button', title: `Remove this ${m.type}`, innerHTML: icons.trash });
+    del.setAttribute('aria-label', `Remove this ${m.type}`);
+    del.addEventListener('click', () => viewer.removeAnnotations([m.id]));
+    row.append(del);
+    list.append(row);
   }
 }
 
@@ -280,27 +476,128 @@ function renderToolbar(): void {
   $('tb-grid').setAttribute('aria-pressed', String(viewer.grid));
   $('tb-cross').setAttribute('aria-pressed', String(viewer.crosshair));
   $('tb-freeze').setAttribute('aria-pressed', String(viewer.frozen));
-  $<HTMLButtonElement>('tb-clear-all').disabled = viewer.annotations.length === 0;
   for (const t of ['circle', 'crosshair', 'rect', 'arrow', 'text'] as const) {
     $(`tool-${t}`).setAttribute('aria-pressed', String(viewer.tool === t));
   }
   $('mirror').setAttribute('aria-pressed', String(session.orientation.mirror));
+  const hints: Record<string, string> = {
+    circle: 'Circle — drag from the centre outwards.',
+    crosshair: 'Crosshair — click where you want it.',
+    rect: 'Rectangle — drag a box.',
+    arrow: 'Arrow — drag from the tail to the point.',
+    text: 'Text — click where the words should start.',
+  };
+  const hint = $('hint-text');
+  hint.textContent = viewer.tool ? (hints[viewer.tool] ?? '') : '';
+  hint.hidden = !hint.textContent;
 }
 
+// ---------- server, agents, activity ----------
 function renderServer(): void {
   const address = $('address');
   const prompt = $<HTMLButtonElement>('copy-prompt');
-  address.classList.toggle('error', !serverInfo.running && serverInfo.port > 0);
+  const dot = (id: string, cls: string) => {
+    const el = $(id);
+    el.className = `pill-dot ${cls}`;
+  };
+
   if (serverInfo.running) {
-    address.textContent = serverInfo.network ? serverInfo.url : `${serverInfo.url} (this computer only)`;
-    address.title = 'MCP endpoint';
+    address.textContent = serverInfo.url;
+    address.classList.remove('error');
+    const where = serverInfo.network ? 'Listening on your network' : 'Listening on this computer only';
+    $('conn-text').textContent = where;
+    dot('conn-dot', 'ok');
+    $('status-text').textContent = clients.length
+      ? `${clients.length} agent${clients.length > 1 ? 's' : ''}`
+      : serverInfo.network
+        ? 'Listening'
+        : 'This computer only';
+    dot('status-dot', clients.length ? 'busy' : 'ok');
+    $('lock-hint').textContent = serverInfo.network ? 'No password' : 'Local only';
   } else if (serverInfo.error) {
     address.textContent = 'Server not running';
+    address.classList.add('error');
     address.title = serverInfo.error;
+    $('conn-text').textContent = `Could not start: ${serverInfo.error}`;
+    dot('conn-dot', 'bad');
+    $('status-text').textContent = 'Server stopped';
+    dot('status-dot', 'bad');
+    $('lock-hint').textContent = '';
   } else {
     address.textContent = 'starting…';
+    $('conn-text').textContent = 'Starting the MCP server…';
+    dot('conn-dot', 'wait');
+    $('status-text').textContent = 'Starting…';
+    dot('status-dot', 'wait');
   }
   prompt.disabled = !serverInfo.running;
+  $<HTMLButtonElement>('copy-address').disabled = !serverInfo.running;
+  $('tb-subtitle').textContent = session.activeCamera?.label ?? (serverInfo.running ? 'No camera' : 'Starting…');
+}
+
+function renderAgents(): void {
+  const list = $('agent-list');
+  list.replaceChildren();
+  if (clients.length === 0) {
+    list.append(h('li', { class: 'list-empty', textContent: 'No agent connected yet.' }));
+    return;
+  }
+  for (const c of clients) {
+    list.append(
+      h(
+        'li',
+        { class: 'agent-item' },
+        h('span', { class: 'agent-mark' }, ico('bolt', 'ico small')),
+        h(
+          'span',
+          { class: 'meta' },
+          h('span', { class: 'name', textContent: c.name, title: `${c.name} ${c.version}`.trim() }),
+          h('span', { class: 'sub', textContent: `Connected ${relTime(c.connectedAt)}` }),
+        ),
+        h('span', { class: 'live-dot', title: 'Connected' }),
+      ),
+    );
+  }
+}
+
+function renderActivity(): void {
+  const list = $('activity-list');
+  $('activity-live').textContent = activity.length ? 'LIVE' : '';
+  list.replaceChildren();
+  if (activity.length === 0) {
+    list.append(h('li', { class: 'list-empty', textContent: 'Nothing yet. What agents do to this camera shows up here.' }));
+    return;
+  }
+  for (const e of activity) {
+    const row = h('li', { class: `activity-item${e.ok ? '' : ' failed'}` });
+    row.append(
+      e.thumbnail
+        ? h('img', { class: 'thumb', src: e.thumbnail, alt: '' })
+        : h('span', { class: 'thumb placeholder' }, ico(e.ok ? 'bolt' : 'close', 'ico small')),
+      h(
+        'span',
+        { class: 'meta' },
+        h('span', { class: 'name' }, h('b', { textContent: e.client }), ' ', e.summary.replace(/^./, (c) => c.toLowerCase())),
+        h('span', { class: 'sub time', textContent: relTime(e.at) }),
+      ),
+    );
+    row.dataset['at'] = e.at;
+    list.append(row);
+  }
+}
+
+/** A short flash on the picture when an agent looks through the camera, so it is never invisible. */
+let flashTimer: number | undefined;
+function flashAgent(e: ActivityEvent): void {
+  const flag = $('agent-flag');
+  flag.replaceChildren(ico('camera', 'ico small'), h('b', { textContent: e.client }), h('span', { textContent: e.summary.replace(/^./, (c) => c.toLowerCase()) }));
+  flag.hidden = false;
+  $('stage-flash').classList.add('on');
+  window.clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => {
+    flag.hidden = true;
+    $('stage-flash').classList.remove('on');
+  }, 1800);
 }
 
 function renderAll(): void {
@@ -309,8 +606,12 @@ function renderAll(): void {
   renderHud();
   renderResolution();
   renderControls();
+  renderAdjustments();
+  renderMarks();
   renderToolbar();
   renderServer();
+  renderAgents();
+  renderActivity();
 }
 
 // ---------- wiring ----------
@@ -318,6 +619,7 @@ function wireStatic(): void {
   $('logo').innerHTML = icons.logo;
   $('open-settings').innerHTML = icons.settings;
   $('refresh').innerHTML = icons.refresh;
+  $('copy-address').innerHTML = icons.copy;
   $('copy-prompt').innerHTML = `${icons.copy}<span>Copy prompt for agent</span>`;
   $('tb-zoom-out').innerHTML = icons.zoomOut;
   $('tb-zoom-in').innerHTML = icons.zoomIn;
@@ -325,6 +627,7 @@ function wireStatic(): void {
   $('tb-cross').innerHTML = icons.crosshair;
   $('tb-freeze').innerHTML = icons.freeze;
   $('tb-save').innerHTML = `${icons.save}<span>Save photo</span>`;
+  $('tb-undo').innerHTML = icons.undo;
   $('tool-circle').innerHTML = icons.circle;
   $('tool-crosshair').innerHTML = icons.plus;
   $('tool-rect').innerHTML = icons.rect;
@@ -333,43 +636,49 @@ function wireStatic(): void {
   $('rot-ccw').innerHTML = icons.rotateCcw;
   $('rot-cw').innerHTML = icons.rotateCw;
   $('mirror').innerHTML = icons.flip;
+  $('adjust-reset').innerHTML = `${icons.undo}<span>Reset</span>`;
+  document.querySelectorAll<HTMLElement>('[data-icon]').forEach((el) => {
+    el.innerHTML = icons[el.dataset['icon'] as IconName] ?? '';
+  });
+  buildAdjustments();
 
   $('copy-prompt').addEventListener('click', () => void copy(buildAgentPrompt(serverInfo), 'Prompt'));
+  $('copy-address').addEventListener('click', () => void copy(serverInfo.url, 'Address'));
   $('refresh').addEventListener('click', () => void session.refresh());
-  $('open-settings').addEventListener('click', () => {
-    $<HTMLInputElement>('set-port').value = String(settings.port);
-    $<HTMLInputElement>('set-network').checked = settings.network;
-    $<HTMLSelectElement>('set-theme').value = settings.theme;
-    $<HTMLDialogElement>('settings').showModal();
-  });
-  $('settings-form').addEventListener('submit', (e) => {
-    const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
-    if (submitter?.value !== 'ok') return;
-    const port = Number($<HTMLInputElement>('set-port').value);
-    const patch: Partial<Settings> = {
-      theme: $<HTMLSelectElement>('set-theme').value as Settings['theme'],
-      network: $<HTMLInputElement>('set-network').checked,
-    };
-    if (Number.isInteger(port) && port >= 1024 && port <= 65535) patch.port = port;
-    void api.patchSettings(patch).then((s) => {
-      settings = s;
-    });
-  });
+  $('status-pill').addEventListener('click', () => openSettings('connection'));
+  $('open-settings').addEventListener('click', () => openSettings('general'));
+  $('open-photos').addEventListener('click', () => void api.openPhotos());
+
+  wireSettings();
 
   $('tb-zoom-in').addEventListener('click', () => viewer.zoomBy(1.5));
   $('tb-zoom-out').addEventListener('click', () => viewer.zoomBy(1 / 1.5));
   $('tb-zoom-reset').addEventListener('click', () => viewer.reset());
   $('tb-grid').addEventListener('click', () => viewer.patchView({ grid: !viewer.grid }));
   $('tb-cross').addEventListener('click', () => viewer.patchView({ crosshair: !viewer.crosshair }));
-  const toggleFreeze = () => viewer.patchView({ frozen: !viewer.frozen });
   $('tb-freeze').addEventListener('click', toggleFreeze);
   $('tb-clear-all').addEventListener('click', () => viewer.clearAnnotations());
+  $('tb-undo').addEventListener('click', () => viewer.undo());
+  $('adjust-reset').addEventListener('click', () => {
+    const id = session.activeId;
+    if (!id) return;
+    session.adjustmentsByCamera = { ...session.adjustmentsByCamera, [id]: { ...NEUTRAL_ADJUSTMENTS } };
+    applyLiveFilter();
+    renderAdjustments();
+    save({ adjustments: { ...settings.adjustments, [id]: { ...NEUTRAL_ADJUSTMENTS } } });
+  });
+
   for (const t of ['circle', 'crosshair', 'rect', 'arrow', 'text'] as const) {
     $(`tool-${t}`).addEventListener('click', () => viewer.setTool(t));
   }
-  $<HTMLInputElement>('draw-color').addEventListener('input', (e) => {
-    viewer.drawColor = (e.target as HTMLInputElement).value;
+  const colorInput = $<HTMLInputElement>('draw-color');
+  const syncSwatch = () => $('swatch-dot').style.setProperty('--c', colorInput.value);
+  colorInput.addEventListener('input', () => {
+    viewer.drawColor = colorInput.value;
+    syncSwatch();
   });
+  syncSwatch();
+
   viewer.onTextRequest = (x, y) => {
     const dialog = $<HTMLDialogElement>('text-dialog');
     const input = $<HTMLInputElement>('text-input');
@@ -384,33 +693,9 @@ function wireStatic(): void {
     dialog.showModal();
     input.focus();
   };
-  window.addEventListener('keydown', (e) => {
-    const t = e.target as HTMLElement;
-    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      viewer.undo();
-    } else if (e.key === 'Escape' && viewer.tool) viewer.setTool(viewer.tool);
-    else if (e.key === ' ') {
-      e.preventDefault();
-      toggleFreeze();
-    } else if (e.key === '+' || e.key === '=') viewer.zoomBy(1.4);
-    else if (e.key === '-') viewer.zoomBy(1 / 1.4);
-    else if (e.key === '0') viewer.reset();
-  });
 
-  const rotate = (delta: number) => {
-    const id = session.activeId;
-    if (!id) return;
-    const rotation = ((session.orientation.rotation + delta + 360) % 360) as Orientation['rotation'];
-    void ctx.setOrientation(id, { ...session.orientation, rotation });
-  };
-  $('rot-cw').addEventListener('click', () => rotate(90));
-  $('rot-ccw').addEventListener('click', () => rotate(-90));
-  $('mirror').addEventListener('click', () => {
-    const id = session.activeId;
-    if (id) void ctx.setOrientation(id, { ...session.orientation, mirror: !session.orientation.mirror });
-  });
+  wireKeys();
+  wireOrientation();
 
   $<HTMLSelectElement>('resolution').addEventListener('change', async (e) => {
     const [w, hgt] = (e.target as HTMLSelectElement).value.split('x').map(Number);
@@ -418,39 +703,210 @@ function wireStatic(): void {
     if (!id || !w || !hgt) return;
     try {
       await session.open(id, { width: w, height: hgt });
-      settings = await api.patchSettings({ resolutions: { ...settings.resolutions, [id]: { width: w, height: hgt } } });
+      save({ resolutions: { ...settings.resolutions, [id]: { width: w, height: hgt } } });
       // Cameras silently fall back to the nearest mode they have; say so rather than pretend.
       if (session.width !== w || session.height !== hgt) {
-        toast(`This camera does not do ${w}×${hgt}; it is using ${session.width}×${session.height}.`, 'error', 6000);
+        toast(`This camera does not do ${w}×${hgt}; it is using ${session.width}×${session.height}.`, 'error');
       }
     } catch (err) {
-      toast((err as Error).message, 'error', 6000);
+      toast((err as Error).message, 'error');
     }
   });
 
-  $('tb-save').addEventListener('click', async () => {
-    try {
-      const res = await captureFrame(ctx, {
-        maxWidth: 8192,
-        format: 'png',
-        quality: 1,
-        ...(viewer.zoom > 1.001 ? { followUserView: true } : {}),
-      });
-      toast(`Saved ${res.width}×${res.height} photo to ${await api.savePhoto(res.data, res.mimeType)}`);
-    } catch (e) {
-      toast((e as Error).message, 'error');
+  $('tb-save').addEventListener('click', () => void savePhoto());
+  $('empty-retry').addEventListener('click', () => {
+    if (session.busy && session.activeId === null) void session.retryIfBusy();
+    else void session.init(settings.lastCameraId).then(renderAll);
+  });
+}
+
+const toggleFreeze = (): void => viewer.patchView({ frozen: !viewer.frozen });
+
+async function savePhoto(): Promise<void> {
+  if (saving) return;
+  saving = true;
+  const btn = $<HTMLButtonElement>('tb-save');
+  btn.classList.add('working');
+  btn.disabled = true;
+  try {
+    const res = await captureFrame(ctx, {
+      maxWidth: 8192,
+      format: 'png',
+      quality: 1,
+      ...(viewer.zoom > 1.001 ? { followUserView: true } : {}),
+    });
+    const path = await api.savePhoto(res.data, res.mimeType);
+    toast(`Saved ${res.width}×${res.height} to ${path}`, 'info', { label: 'Show', run: () => void api.openPhotos() });
+  } catch (e) {
+    toast((e as Error).message, 'error');
+  } finally {
+    saving = false;
+    btn.classList.remove('working');
+    btn.disabled = false;
+  }
+}
+
+function wireOrientation(): void {
+  const rotate = (delta: number) => {
+    const id = session.activeId;
+    if (!id) return;
+    const rotation = ((session.orientation.rotation + delta + 360) % 360) as Orientation['rotation'];
+    void ctx.setOrientation(id, { ...session.orientation, rotation }).catch((e: Error) => toast(e.message, 'error'));
+  };
+  $('rot-cw').addEventListener('click', () => rotate(90));
+  $('rot-ccw').addEventListener('click', () => rotate(-90));
+  $('mirror').addEventListener('click', () => {
+    const id = session.activeId;
+    if (!id) return;
+    void ctx
+      .setOrientation(id, { ...session.orientation, mirror: !session.orientation.mirror })
+      .catch((e: Error) => toast(e.message, 'error'));
+  });
+}
+
+function openSettings(pane: string): void {
+  $<HTMLInputElement>('set-port').value = String(settings.port);
+  $<HTMLInputElement>('set-network').checked = settings.network;
+  $<HTMLSelectElement>('set-theme').value = settings.theme;
+  showPane(pane);
+  const dialog = $<HTMLDialogElement>('settings');
+  if (!dialog.open) dialog.showModal();
+}
+
+function showPane(pane: string): void {
+  document.querySelectorAll<HTMLElement>('.sheet-pane').forEach((el) => {
+    el.hidden = el.dataset['pane'] !== pane;
+  });
+  document.querySelectorAll<HTMLButtonElement>('.sheet-tab').forEach((el) => {
+    el.setAttribute('aria-selected', String(el.dataset['pane'] === pane));
+  });
+}
+
+/** Settings apply as they are changed; only the port waits until it is a usable number. */
+function wireSettings(): void {
+  document.querySelectorAll<HTMLButtonElement>('.sheet-tab').forEach((tab) => {
+    tab.addEventListener('click', () => showPane(tab.dataset['pane'] ?? 'general'));
+  });
+  $<HTMLSelectElement>('set-theme').addEventListener('change', (e) => {
+    save({ theme: (e.target as HTMLSelectElement).value as Settings['theme'] });
+  });
+  $<HTMLInputElement>('set-network').addEventListener('change', (e) => {
+    save({ network: (e.target as HTMLInputElement).checked });
+  });
+  const port = $<HTMLInputElement>('set-port');
+  const note = $('port-note');
+  const commitPort = () => {
+    const value = Number(port.value);
+    const ok = Number.isInteger(value) && value >= 1024 && value <= 65535;
+    note.classList.toggle('bad', !ok);
+    note.textContent = ok
+      ? '1024–65535. The server restarts when you change it.'
+      : 'Pick a number between 1024 and 65535.';
+    if (ok && value !== settings.port) save({ port: value });
+  };
+  port.addEventListener('change', commitPort);
+  port.addEventListener('blur', commitPort);
+  $('settings-form').addEventListener('submit', () => undefined);
+}
+
+/** The keys the menu advertises, handled here so they work wherever focus happens to be. */
+function wireKeys(): void {
+  window.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement;
+    const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable;
+    const dialogOpen = $<HTMLDialogElement>('settings').open || $<HTMLDialogElement>('text-dialog').open;
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+
+    if (mod && key === 'z' && !dialogOpen) {
+      e.preventDefault();
+      viewer.undo();
+      return;
+    }
+    if (mod && key === ',') {
+      e.preventDefault();
+      openSettings('general');
+      return;
+    }
+    if (dialogOpen || typing) return;
+
+    if (mod && key === 's') {
+      e.preventDefault();
+      void savePhoto();
+    } else if (mod && (key === '+' || key === '=')) {
+      e.preventDefault();
+      viewer.zoomBy(1.5);
+    } else if (mod && key === '-') {
+      e.preventDefault();
+      viewer.zoomBy(1 / 1.5);
+    } else if (mod && key === '0') {
+      e.preventDefault();
+      viewer.reset();
+    } else if (mod && key === 'g') {
+      e.preventDefault();
+      viewer.patchView({ grid: !viewer.grid });
+    } else if (mod && key === 'k') {
+      e.preventDefault();
+      viewer.patchView({ crosshair: !viewer.crosshair });
+    } else if (mod && key === 'r') {
+      e.preventDefault();
+      $(e.shiftKey ? 'rot-ccw' : 'rot-cw').click();
+    } else if (mod && key === 'm') {
+      e.preventDefault();
+      $('mirror').click();
+    } else if (mod) {
+      // Leave every other chord to the menu and the platform.
+    } else if (e.key === 'Escape' && viewer.tool) {
+      viewer.setTool(null);
+    } else if (e.key === ' ') {
+      // Space belongs to the picture, not to whichever button happens to have focus.
+      e.preventDefault();
+      toggleFreeze();
+    } else if (e.key === '+' || e.key === '=') {
+      viewer.zoomBy(1.4);
+    } else if (e.key === '-') {
+      viewer.zoomBy(1 / 1.4);
+    } else if (e.key === '0') {
+      viewer.reset();
     }
   });
+}
 
-  $('empty-retry').addEventListener('click', () => void session.init(settings.lastCameraId).then(renderAll));
+/** The application menu drives the same things the window does, so shortcuts are discoverable. */
+function wireMenu(): void {
+  const actions: Record<string, () => void> = {
+    settings: () => openSettings('general'),
+    'copy-prompt': () => void copy(buildAgentPrompt(serverInfo), 'Prompt'),
+    'save-photo': () => void savePhoto(),
+    undo: () => viewer.undo(),
+    'clear-marks': () => viewer.clearAnnotations(),
+    'zoom-in': () => viewer.zoomBy(1.5),
+    'zoom-out': () => viewer.zoomBy(1 / 1.5),
+    'zoom-reset': () => viewer.reset(),
+    'toggle-grid': () => viewer.patchView({ grid: !viewer.grid }),
+    'toggle-crosshair': () => viewer.patchView({ crosshair: !viewer.crosshair }),
+    'toggle-freeze': toggleFreeze,
+    'rotate-cw': () => $('rot-cw').click(),
+    'rotate-ccw': () => $('rot-ccw').click(),
+    mirror: () => $('mirror').click(),
+    'rescan-cameras': () => void session.refresh(),
+    'window-maximized': () => document.documentElement.classList.add('maximized'),
+    'window-restored': () => document.documentElement.classList.remove('maximized'),
+    'window-fullscreen': () => document.documentElement.classList.add('maximized'),
+  };
+  api.onMenu(({ action }) => actions[action]?.());
 }
 
 async function main(): Promise<void> {
   document.documentElement.classList.add(`platform-${api.platform}`);
   settings = await api.getSettings();
+  applyTheme();
   serverInfo = await api.getServerInfo();
+  clients = await api.getClients();
   session.orientations = settings.orientations;
+  session.adjustmentsByCamera = settings.adjustments;
   wireStatic();
+  wireMenu();
 
   session.addEventListener('change', () => {
     renderCameras();
@@ -458,12 +914,15 @@ async function main(): Promise<void> {
     renderHud();
     renderResolution();
     renderControls();
+    renderAdjustments();
     renderToolbar();
+    renderServer();
   });
   session.addEventListener('focus', renderFocus);
   viewer.addEventListener('change', () => {
     renderHud();
     renderToolbar();
+    renderMarks();
   });
 
   api.onServerInfo((info) => {
@@ -472,11 +931,31 @@ async function main(): Promise<void> {
   });
   api.onSettings((s) => {
     settings = s;
+    applyTheme();
     session.orientations = s.orientations;
+    session.adjustmentsByCamera = s.adjustments;
+    applyLiveFilter();
     viewer.layout();
     renderToolbar();
+    renderAdjustments();
   });
+  api.onClients((list) => {
+    clients = list;
+    renderAgents();
+    renderServer();
+  });
+  api.onActivity((event) => {
+    activity = [event, ...activity].slice(0, 40);
+    renderActivity();
+    if (event.thumbnail) flashAgent(event);
+  });
+
   setInterval(() => void session.retryIfBusy(), 3000);
+  // Relative times would otherwise freeze at "just now".
+  setInterval(() => {
+    if (activity.length) renderActivity();
+    if (clients.length) renderAgents();
+  }, 15_000);
 
   renderAll();
   await session.init(settings.lastCameraId);
@@ -484,12 +963,13 @@ async function main(): Promise<void> {
   if (lastSize && session.activeId && (lastSize.width !== session.width || lastSize.height !== session.height)) {
     await session.open(session.activeId, lastSize).catch(() => undefined);
   }
+  applyLiveFilter();
   renderAll();
   api.ready();
 }
 
 void main().catch((e) => {
   console.error(e);
-  toast(`Startup failed: ${(e as Error).message}`, 'error', 10_000);
+  toast(`Startup failed: ${(e as Error).message}`, 'error');
   api.ready();
 });

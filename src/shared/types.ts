@@ -36,6 +36,32 @@ export interface CameraControl {
   responsive?: boolean;
 }
 
+/**
+ * Electroscope's own picture adjustments, applied to the live view and to every capture.
+ * These are not camera settings: they work on any camera on any platform, which matters
+ * because macOS exposes almost no real UVC controls (see docs/camera-controls.md).
+ * 1 is "as the camera sent it".
+ */
+export interface ImageAdjustments {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+}
+
+export const NEUTRAL_ADJUSTMENTS: ImageAdjustments = { brightness: 1, contrast: 1, saturation: 1 };
+
+export const ADJUSTMENT_RANGE = { min: 0.25, max: 2.5, step: 0.05 } as const;
+
+export function isNeutral(a: ImageAdjustments): boolean {
+  return a.brightness === 1 && a.contrast === 1 && a.saturation === 1;
+}
+
+/** A CSS/canvas filter string, or '' when nothing needs doing. */
+export function adjustmentFilter(a: ImageAdjustments): string {
+  if (isNeutral(a)) return '';
+  return `brightness(${a.brightness}) contrast(${a.contrast}) saturate(${a.saturation})`;
+}
+
 export type AnnotationType = 'circle' | 'crosshair' | 'rect' | 'arrow' | 'text';
 
 /**
@@ -70,6 +96,8 @@ export interface Annotation {
   label?: string;
   /** Colour behind text; 'none' for no backing. */
   background?: string;
+  /** Who put it there: "You", or the agent's own name. */
+  author?: string;
 }
 
 export type AnnotationInput = Partial<Omit<Annotation, 'type'>> & Pick<Annotation, 'type' | 'x' | 'y'>;
@@ -98,7 +126,10 @@ export interface CameraState {
   orientation: Orientation;
   focusScore: number | null;
   controls: CameraControl[];
+  /** Why there are no controls, when there are none. Empty when some exist. */
+  controlsNote: string;
   maxResolution: { width: number; height: number } | null;
+  adjustments: ImageAdjustments;
   view: ViewState;
   annotations: Annotation[];
 }
@@ -112,6 +143,8 @@ export interface CaptureRequest {
   followUserView?: boolean;
   /** Draw the agent's annotations onto the image. */
   annotated?: boolean;
+  /** Also return a small preview, for the activity list in the window. */
+  thumbnail?: boolean;
 }
 
 export interface FrameMetrics {
@@ -137,6 +170,8 @@ export interface CaptureResult {
   orientation: Orientation;
   metrics: FrameMetrics;
   capturedAt: string;
+  /** A small JPEG data URL, so the window can show what the agent just looked at. */
+  thumbnail?: string;
 }
 
 export interface ClientInfo {
@@ -145,6 +180,30 @@ export interface ClientInfo {
   version: string;
   connectedAt: string;
   lastSeen: string;
+}
+
+/** One thing an agent did, for the activity list in the window. */
+export interface ActivityEvent {
+  id: string;
+  /** MCP session id of the agent, so entries can be grouped by who did them. */
+  clientId: string;
+  /** The agent's own name, e.g. "Claude Code". */
+  client: string;
+  tool: string;
+  /** One plain-language line for the window. */
+  summary: string;
+  at: string;
+  ok: boolean;
+  /** Set when the tool produced a picture. */
+  thumbnail?: string;
+}
+
+export interface WindowBounds {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  maximized?: boolean;
 }
 
 export interface ServerInfo {
@@ -167,7 +226,10 @@ export interface Settings {
   lastCameraId: string | null;
   orientations: Record<string, Orientation>;
   resolutions: Record<string, { width: number; height: number }>;
+  adjustments: Record<string, ImageAdjustments>;
   theme: 'system' | 'dark' | 'light';
+  /** Where the window was last time, so it opens where it was left. */
+  window: WindowBounds | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -176,7 +238,9 @@ export const DEFAULT_SETTINGS: Settings = {
   lastCameraId: null,
   orientations: {},
   resolutions: {},
+  adjustments: {},
   theme: 'system',
+  window: null,
 };
 
 /** Commands the main process (MCP) sends to the renderer, which owns the camera. */
@@ -190,8 +254,9 @@ export interface RendererCommands {
   };
   setOrientation(args: Partial<Orientation>): CameraState;
   setView(args: Partial<ViewState>): CameraState;
+  setAdjustments(args: Partial<ImageAdjustments>): CameraState;
   /** Add or replace marks (by id), remove some, or clear all. */
-  setAnnotations(args: { upsert?: AnnotationInput[]; remove?: string[]; clear?: boolean }): CameraState;
+  setAnnotations(args: { upsert?: AnnotationInput[]; remove?: string[]; clear?: boolean; author?: string }): CameraState;
   capture(args: CaptureRequest): CaptureResult;
   refreshCameras(): CameraState;
 }

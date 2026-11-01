@@ -2,10 +2,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type {
+  ActivityEvent,
   AnnotationInput,
   CameraState,
   CaptureRequest,
   CaptureResult,
+  ClientInfo,
   RendererCommandName,
   RendererCommands,
 } from '../../shared/types.js';
@@ -24,6 +26,8 @@ export interface AppFacade {
   saveCapture(result: CaptureResult, tool: string): Promise<string>;
   /** Save a photo for the human (Pictures folder); resolves to the file path. */
   savePhoto(result: CaptureResult): Promise<string>;
+  /** Tell the window what an agent just did, so the human can see it happen. */
+  activity(event: Omit<ActivityEvent, 'id' | 'at'>): void;
 }
 
 export const SERVER_INSTRUCTIONS = [
@@ -76,6 +80,44 @@ type CaptureArgs = FrameArgs & {
   quality?: number | undefined;
 };
 
+/** One plain line for the activity list in the window: what this call did, in the human's words. */
+function describeCall(tool: string, args: Record<string, unknown>): string {
+  const region = args['region'] as { width?: number } | undefined;
+  switch (tool) {
+    case 'get_status':
+      return 'Checked the microscope';
+    case 'list_cameras':
+      return 'Listed the cameras';
+    case 'select_camera':
+      return `Switched to ${String(args['camera'] ?? 'another camera')}`;
+    case 'set_camera_controls':
+      return `Adjusted ${Object.keys((args['controls'] as object) ?? {}).join(', ') || 'the camera'}`;
+    case 'set_orientation':
+      return 'Rotated the image';
+    case 'set_view':
+      if (args['frozen'] !== undefined) return args['frozen'] ? 'Froze your view' : 'Unfroze your view';
+      if (args['zoom'] !== undefined) return `Zoomed your view to ${String(args['zoom'])}x`;
+      return 'Changed your view';
+    case 'annotate': {
+      const marks = (args['annotations'] as unknown[] | undefined)?.length ?? 0;
+      return marks === 1 ? 'Drew a mark on your view' : `Drew ${marks} marks on your view`;
+    }
+    case 'clear_annotations':
+      return 'Removed marks from your view';
+    case 'capture_snapshot':
+      if (args['follow_user_view']) return 'Captured the area you are zoomed to';
+      return region ? 'Captured a close-up' : 'Captured a snapshot';
+    case 'capture_sequence':
+      return `Captured ${String(args['count'] ?? '')} frames in a row`;
+    case 'set_image_adjustments':
+      return 'Adjusted the picture';
+    case 'save_photo':
+      return 'Saved a full-resolution photo';
+    default:
+      return tool;
+  }
+}
+
 function textResult(value: unknown, isError = false): CallToolResult {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
@@ -126,6 +168,8 @@ function toRequest(args: CaptureArgs, defaults: { maxWidth: number; format: 'jpe
     maxWidth: args.max_width ?? defaults.maxWidth,
     format: args.format ?? defaults.format,
     quality: (args.quality ?? 85) / 100,
+    // The window shows the human what the agent just looked at.
+    thumbnail: true,
   };
   if (args.camera) req.cameraId = args.camera;
   if (args.include_annotations) req.annotated = true;
@@ -140,6 +184,7 @@ function summarise(state: CameraState) {
     cameras: state.cameras.map((c) => ({ id: c.id, label: c.label, active: c.active })),
     resolution: state.active ? `${state.width}x${state.height}` : null,
     max_resolution: state.maxResolution ? `${state.maxResolution.width}x${state.maxResolution.height}` : null,
+    image_adjustments: state.adjustments,
     fps: state.fps ? round(state.fps, 1) : null,
     orientation: state.orientation,
     view: {
@@ -155,16 +200,62 @@ function summarise(state: CameraState) {
     annotations: state.annotations,
     live_focus_score: state.focusScore === null ? null : round(state.focusScore, 1),
     controls: state.controls,
+    ...(state.controlsNote ? { controls_note: state.controlsNote } : {}),
   };
 }
 
-export function createMcpServer(backend: CameraBackend, app: AppFacade, version: string): McpServer {
+export function createMcpServer(
+  backend: CameraBackend,
+  app: AppFacade,
+  version: string,
+  client: ClientInfo = { id: '', name: 'an agent', version: '', connectedAt: '', lastSeen: '' },
+): McpServer {
   const server = new McpServer(
     { name: 'electroscope', title: 'Electroscope', version },
     { instructions: SERVER_INSTRUCTIONS },
   );
 
-  server.registerTool(
+  /**
+   * Every tool goes through here, so the window can show the human what the agent is doing to
+   * their camera as it happens. Reporting never changes what the agent gets back.
+   */
+  const report = (tool: string, args: unknown, ok: boolean, thumbnail?: string): void => {
+    try {
+      app.activity({
+        clientId: client.id,
+        client: client.name,
+        tool,
+        summary: describeCall(tool, (args ?? {}) as Record<string, unknown>),
+        ok,
+        ...(thumbnail ? { thumbnail } : {}),
+      });
+    } catch {
+      /* the activity list is never worth failing a tool call over */
+    }
+  };
+
+  /** Set by the capture handlers so the activity entry can carry the picture the agent just took. */
+  let lastThumbnail: string | undefined;
+  type Handler = (args: never) => Promise<CallToolResult>;
+  const watched =
+    (name: string, handler: Handler) =>
+    async (args: never): Promise<CallToolResult> => {
+      try {
+        const result = await handler(args);
+        report(name, args, !result.isError, lastThumbnail);
+        return result;
+      } catch (e) {
+        report(name, args, false);
+        throw e;
+      } finally {
+        lastThumbnail = undefined;
+      }
+    };
+  /** Registers a tool exactly as the SDK would, with its call reported to the window. */
+  const tool = ((name: string, config: never, handler: Handler) =>
+    server.registerTool(name, config, watched(name, handler) as never)) as typeof server.registerTool;
+
+  tool(
     'get_status',
     {
       title: 'Get microscope status',
@@ -175,7 +266,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     async () => textResult(summarise(await backend.call('getState', undefined))),
   );
 
-  server.registerTool(
+  tool(
     'list_cameras',
     {
       title: 'List cameras',
@@ -188,7 +279,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'select_camera',
     {
       title: 'Switch camera',
@@ -208,12 +299,12 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'set_camera_controls',
     {
       title: 'Adjust camera controls',
       description:
-        'Set hardware camera controls such as focusMode ("manual"/"continuous"), focusDistance, zoom, exposureMode, exposureTime, brightness, contrast, sharpness, colorTemperature, torch. Names and ranges come from get_status; the camera decides which it supports. Setting a manual value switches the matching mode to manual first. Controls the camera ignores are reported in "rejected".',
+        'Set hardware camera controls such as focusMode ("manual"/"continuous"), focusDistance, zoom, exposureMode, exposureTime, brightness, contrast, sharpness, colorTemperature. Only the names get_status lists are available: most USB microscopes expose none, and macOS can only drive zoom, pan and tilt at all. When get_status lists no controls, use set_image_adjustments instead, which always works. Setting a manual value switches the matching mode to manual first. Controls the camera ignores are reported in "rejected".',
       inputSchema: {
         controls: z
           .record(z.string(), z.union([z.number(), z.string(), z.boolean()]))
@@ -224,11 +315,20 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     async ({ controls }) => {
       const out = await backend.call('setControls', { controls });
       const nothingApplied = Object.keys(out.applied).length === 0 && Object.keys(out.rejected).length > 0;
-      return textResult({ applied: out.applied, rejected: out.rejected, controls: out.state.controls }, nothingApplied);
+      return textResult(
+        {
+          applied: out.applied,
+          rejected: out.rejected,
+          controls: out.state.controls,
+          ...(out.state.controlsNote ? { controls_note: out.state.controlsNote } : {}),
+          ...(nothingApplied ? { try_instead: 'set_image_adjustments changes brightness, contrast and saturation on any camera.' } : {}),
+        },
+        nothingApplied,
+      );
     },
   );
 
-  server.registerTool(
+  tool(
     'set_orientation',
     {
       title: 'Rotate or mirror the image',
@@ -249,7 +349,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'set_view',
     {
       title: 'Control the on-screen view',
@@ -281,6 +381,29 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
+  tool(
+    'set_image_adjustments',
+    {
+      title: 'Adjust the picture',
+      description:
+        "Brighten, add contrast or change saturation. Electroscope does this itself, so it works on every camera on every platform, unlike set_camera_controls. 1 means the picture as the camera sent it; 0.25 to 2.5 are allowed. It changes what the human sees and every image you capture, but not focus_score or brightness in the capture metadata, which always describe the untouched frame.",
+      inputSchema: {
+        brightness: z.number().min(0.25).max(2.5).optional(),
+        contrast: z.number().min(0.25).max(2.5).optional(),
+        saturation: z.number().min(0.25).max(2.5).optional().describe('0 is not allowed; use 0.25 for nearly grey'),
+      },
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ brightness, contrast, saturation }) => {
+      const patch: Parameters<RendererCommands['setAdjustments']>[0] = {};
+      if (brightness !== undefined) patch.brightness = brightness;
+      if (contrast !== undefined) patch.contrast = contrast;
+      if (saturation !== undefined) patch.saturation = saturation;
+      const state = await backend.call('setAdjustments', patch);
+      return textResult({ image_adjustments: state.adjustments });
+    },
+  );
+
   const unit = z.number().min(0).max(1);
   const annotationSchema = z.object({
     id: z.string().min(1).max(40).optional().describe('Give a mark an id to move or restyle it later; reusing an id replaces that mark'),
@@ -302,7 +425,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     background: z.string().max(40).optional().describe('Colour behind text and labels (default translucent black); "none" for no backing'),
   });
 
-  server.registerTool(
+  tool(
     'annotate',
     {
       title: 'Draw on the live view',
@@ -330,12 +453,12 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
         if (a.background !== undefined) m.background = a.background;
         return m;
       });
-      const state = await backend.call('setAnnotations', { upsert });
+      const state = await backend.call('setAnnotations', { upsert, author: client.name });
       return textResult({ annotations: state.annotations });
     },
   );
 
-  server.registerTool(
+  tool(
     'clear_annotations',
     {
       title: 'Remove marks from the live view',
@@ -349,7 +472,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'capture_snapshot',
     {
       title: 'Capture a snapshot',
@@ -361,6 +484,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     async (args) => {
       const result = await backend.call('capture', toRequest(args, { maxWidth: 1280, format: 'jpeg' }));
       const path = await app.saveCapture(result, 'capture_snapshot');
+      lastThumbnail = result.thumbnail;
       return {
         content: [
           { type: 'image', data: Buffer.from(result.data).toString('base64'), mimeType: result.mimeType },
@@ -370,7 +494,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'capture_sequence',
     {
       title: 'Capture a short sequence',
@@ -391,6 +515,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
         if (i > 0) await new Promise((r) => setTimeout(r, interval_ms));
         const result = await backend.call('capture', toRequest(args, { maxWidth: 800, format: 'jpeg' }));
         const path = await app.saveCapture(result, 'capture_sequence');
+        lastThumbnail = result.thumbnail;
         content.push({ type: 'image', data: Buffer.from(result.data).toString('base64'), mimeType: result.mimeType });
         frames.push(describeCapture(result, path, { index: i + 1, t_ms: Date.now() - started }));
       }
@@ -399,7 +524,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     },
   );
 
-  server.registerTool(
+  tool(
     'save_photo',
     {
       title: 'Save a full-resolution photo',
@@ -411,6 +536,7 @@ export function createMcpServer(backend: CameraBackend, app: AppFacade, version:
     async (args) => {
       const result = await backend.call('capture', toRequest({ ...args, max_width: 8192 }, { maxWidth: 8192, format: 'png' }));
       const path = await app.savePhoto(result);
+      lastThumbnail = result.thumbnail;
       return textResult({
         saved_to: path,
         width: result.width,

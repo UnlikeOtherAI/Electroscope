@@ -1,4 +1,5 @@
-import type { FrameMetrics, Orientation, Region } from '../shared/types.js';
+import type { FrameMetrics, ImageAdjustments, Orientation, Region } from '../shared/types.js';
+import { adjustmentFilter } from '../shared/types.js';
 
 /** Size of a frame after rotation. */
 export function orientedSize(w: number, h: number, o: Orientation): { width: number; height: number } {
@@ -64,6 +65,21 @@ export function renderFrame(
     sourceWidth: sw,
     sourceHeight: sh,
   };
+}
+
+/**
+ * Apply Electroscope's own picture adjustments in place. Done after the metrics are measured, so
+ * focus_score and brightness still describe what the sensor delivered rather than our processing.
+ */
+export function applyAdjustments(canvas: OffscreenCanvas, adjustments: ImageAdjustments): OffscreenCanvas {
+  const filter = adjustmentFilter(adjustments);
+  if (!filter) return canvas;
+  const out = new OffscreenCanvas(canvas.width, canvas.height);
+  const ctx = out.getContext('2d');
+  if (!ctx) throw new Error('2D canvas unavailable');
+  ctx.filter = filter;
+  ctx.drawImage(canvas, 0, 0);
+  return out;
 }
 
 const ANALYSIS_LONG_EDGE = 640;

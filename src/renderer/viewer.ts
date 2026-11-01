@@ -118,9 +118,9 @@ export class Viewer extends EventTarget {
     if (last) this.removeAnnotations([last.id]);
   }
 
-  upsertAnnotations(inputs: AnnotationInput[]): void {
+  upsertAnnotations(inputs: AnnotationInput[], author = 'You'): void {
     // Validate everything first so a bad mark does not leave the others half-applied.
-    const made = inputs.map((i) => normalise(i, i.id ?? `m${this.nextId++}`));
+    const made = inputs.map((i) => ({ ...normalise(i, i.id ?? `m${this.nextId++}`), author }));
     for (const m of made) {
       const at = this.annotations.findIndex((a) => a.id === m.id);
       if (at >= 0) this.annotations[at] = m;

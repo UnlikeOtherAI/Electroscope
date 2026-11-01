@@ -1,8 +1,17 @@
-import type { CameraControl, CameraInfo, CameraState, Orientation } from '../shared/types.js';
+import type { CameraControl, CameraInfo, CameraState, ImageAdjustments, Orientation } from '../shared/types.js';
+import { NEUTRAL_ADJUSTMENTS } from '../shared/types.js';
 import { computeMetrics } from './frames.js';
 
+/**
+ * Only controls a desktop browser engine can really drive are listed. Chromium implements these
+ * on Windows through IAMVideoProcAmp / IAMCameraControl; on macOS it reports at most zoom, pan
+ * and tilt, and only for cameras with real UVC PTZ. `iso` and `torch` are never implemented on
+ * either desktop platform, so offering them would be a lie. See docs/camera-controls.md.
+ */
 const NUMERIC = [
   'zoom',
+  'pan',
+  'tilt',
   'focusDistance',
   'exposureTime',
   'exposureCompensation',
@@ -11,12 +20,8 @@ const NUMERIC = [
   'saturation',
   'sharpness',
   'colorTemperature',
-  'iso',
-  'pan',
-  'tilt',
 ] as const;
 const MODES = ['focusMode', 'exposureMode', 'whiteBalanceMode'] as const;
-const TOGGLES = ['torch'] as const;
 
 /** A mode must be set before the value it governs. */
 const MODE_FOR: Record<string, { mode: string; value: string }> = {
@@ -48,12 +53,15 @@ export class CameraSession extends EventTarget {
   private unresponsive = new Set<string>();
   private wantedId: string | null = null;
   orientations: Record<string, Orientation> = {};
+  adjustmentsByCamera: Record<string, ImageAdjustments> = {};
 
   private stream: MediaStream | null = null;
   private frames = 0;
   private fpsTimer: number | undefined;
   private focusTimer: number | undefined;
-  private opening: Promise<void> = Promise.resolve();
+  private openQueue: Promise<void> = Promise.resolve();
+  /** True while a camera is being opened, so the window can say what it is waiting for. */
+  opening = false;
 
   constructor(video: HTMLVideoElement) {
     super();
@@ -72,6 +80,14 @@ export class CameraSession extends EventTarget {
     this.video.requestVideoFrameCallback(tick);
   }
 
+  /**
+   * Some UVC cameras hand over a stream and then never send a frame. Saying "LIVE" over a black
+   * rectangle in that case is the one thing the window must never do.
+   */
+  get hasSignal(): boolean {
+    return this.activeId !== null && this.video.videoWidth > 0;
+  }
+
   get activeCamera(): CameraInfo | null {
     const c = this.cameras.find((x) => x.id === this.activeId);
     return c ? { ...c, active: true } : null;
@@ -85,6 +101,28 @@ export class CameraSession extends EventTarget {
     return this.orientations[id] ?? DEFAULT_ORIENTATION;
   }
 
+  get adjustments(): ImageAdjustments {
+    return (this.activeId && this.adjustmentsByCamera[this.activeId]) || NEUTRAL_ADJUSTMENTS;
+  }
+
+  adjustmentsFor(id: string): ImageAdjustments {
+    return this.adjustmentsByCamera[id] ?? NEUTRAL_ADJUSTMENTS;
+  }
+
+  /**
+   * Why the controls list is empty. Saying nothing here is what makes the app look broken:
+   * the human cannot tell a camera with no knobs from a bug in Electroscope.
+   */
+  get controlsNote(): string {
+    if (this.controls.some((c) => c.responsive !== false)) return '';
+    if (!this.activeId) return '';
+    const ignored = this.controls.length > 0;
+    if (ignored) return 'This camera lists controls but ignores every one of them, so none are shown.';
+    return window.electroscope?.platform === 'darwin'
+      ? 'No adjustable controls. macOS only exposes zoom, pan and tilt over USB video, and this camera has none — use Picture above.'
+      : 'This camera reports no adjustable controls — use Picture above.';
+  }
+
   state(): Omit<CameraState, 'view' | 'annotations'> {
     return {
       active: this.activeCamera,
@@ -95,7 +133,9 @@ export class CameraSession extends EventTarget {
       orientation: this.orientation,
       focusScore: this.focusScore,
       controls: this.controls,
+      controlsNote: this.controlsNote,
       maxResolution: this.maxResolution,
+      adjustments: this.adjustments,
     };
   }
 
@@ -138,8 +178,8 @@ export class CameraSession extends EventTarget {
 
   open(id: string, size?: { width: number; height: number }): Promise<void> {
     // Serialise opens: Windows allows only one handle per camera.
-    this.opening = this.opening.catch(() => undefined).then(() => this.doOpen(id, size));
-    return this.opening;
+    this.openQueue = this.openQueue.catch(() => undefined).then(() => this.doOpen(id, size));
+    return this.openQueue;
   }
 
   private async doOpen(id: string, size?: { width: number; height: number }): Promise<void> {
@@ -147,6 +187,8 @@ export class CameraSession extends EventTarget {
     this.error = null;
     this.wantedId = id;
     this.unresponsive.clear();
+    this.opening = true;
+    this.changed();
     const want = size ?? PREFERRED_SIZE;
     try {
       // A camera that was just released can report "busy" for a moment; retry before giving up.
@@ -178,11 +220,13 @@ export class CameraSession extends EventTarget {
     } catch (e) {
       this.closeStream();
       this.activeId = null;
+      this.opening = false;
       this.busy = (e as DOMException).name === 'NotReadableError';
       this.error = describeError(e);
       this.changed();
       throw new Error(this.error);
     }
+    this.opening = false;
     this.busy = false;
     this.readTrack();
     this.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
@@ -278,9 +322,6 @@ export class CameraSession extends EventTarget {
       if (Array.isArray(c) && c.length > 1) {
         out.push({ name, value: (settings[name] as string | undefined) ?? null, options: c });
       }
-    }
-    for (const name of TOGGLES) {
-      if (caps[name]) out.push({ name, value: Boolean(settings[name]) });
     }
     this.controls = out.map((c) => (this.unresponsive.has(c.name) ? { ...c, responsive: false } : c));
   }
