@@ -1,7 +1,7 @@
 {
   "name": "electroscope",
   "productName": "Electroscope",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Electronics microscope companion: a live camera viewer for you, on-demand snapshots for AI over MCP.",
   "license": "MIT",
   "author": "UnlikeOtherAI",

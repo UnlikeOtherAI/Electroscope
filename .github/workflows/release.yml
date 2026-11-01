@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Require a version tag on main
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "$REF_TYPE" = tag
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const {version} = JSON.parse(readFileSync("package.json"));
+            if (!/^\d+\.\d+\.\d+$/.test(version) || process.env.RELEASE_TAG !== "v" + version) throw new Error("Tag must match package.json version");'
+          git merge-base --is-ancestor HEAD origin/main
+
+  windows:
+    name: Windows signed installer and portable app
+    needs: source
+    runs-on: windows-latest
+    environment: release
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ELECTROSCOPE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ENDPOINT }}
+      ELECTROSCOPE_ARTIFACT_SIGNING_ACCOUNT: ${{ vars.WINDOWS_ARTIFACT_SIGNING_ACCOUNT }}
+      ELECTROSCOPE_ARTIFACT_SIGNING_PROFILE: ${{ vars.WINDOWS_ARTIFACT_SIGNING_PROFILE }}
+      WINDOWS_SIGNER_EKU: ${{ vars.WINDOWS_SIGNER_EKU }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: azure/login@935127ca5bb3c4b02c9c2c10060028383878f33f # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Prepare pinned signing client
+        shell: pwsh
+        run: ./scripts/prepare-windows-signing.ps1 -DestinationDirectory (Join-Path $env:RUNNER_TEMP 'electroscope-signing')
+      - name: Package and sign
+        run: npx electron-builder --win --x64 --publish never --config build/release.win.cjs
+      - name: Verify final packages and install
+        shell: pwsh
+        run: |
+          ./scripts/verify-windows-signature.ps1 release/Electroscope-Windows-x64-Setup.exe
+          ./scripts/verify-windows-signature.ps1 release/Electroscope-Windows-x64-Portable.exe
+          $install = Join-Path $env:RUNNER_TEMP 'ElectroscopeInstalled'
+          $setup = Start-Process release/Electroscope-Windows-x64-Setup.exe -ArgumentList @('/S', "/D=$install") -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exited $($setup.ExitCode)" }
+          $env:ELECTROSCOPE_EXE = Join-Path $install 'Electroscope.exe'
+          ./scripts/verify-windows-signature.ps1 $env:ELECTROSCOPE_EXE
+          node scripts/e2e.mjs --fake
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows app failed end-to-end checks.' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: |
+            release/Electroscope-Windows-x64-Setup.exe
+            release/Electroscope-Windows-x64-Portable.exe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-release-tests
+          path: test-output/fake/
+
+  mac:
+    name: macOS signed and notarized app
+    needs: source
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Load notarization key
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          umask 077
+          test -n "$API_KEY"
+          printf '%s' "$API_KEY" > "$RUNNER_TEMP/notary.p8"
+      - name: Sign, notarize, and package
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/notary.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx electron-builder --mac --arm64 --publish never --config build/release.mac.cjs
+      - name: Verify and test the distributable ZIP
+        run: |
+          ditto -x -k release/Electroscope-macOS-arm64.zip "$RUNNER_TEMP/zip-test"
+          app="$RUNNER_TEMP/zip-test/Electroscope.app"
+          codesign --verify --strict --deep "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -F 'Authority=Developer ID Application: UnlikeOtherAI s.r.o. (23B7GTLBN7)'
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          ELECTROSCOPE_EXE="$app/Contents/MacOS/Electroscope" node scripts/e2e.mjs --fake
+      - name: Verify the DMG
+        run: |
+          hdiutil attach -nobrowse -readonly -plist release/Electroscope-macOS-arm64.dmg > "$RUNNER_TEMP/dmg-mount.plist"
+          volume="$(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1], "rb")); print(next(e["mount-point"] for e in p["system-entities"] if e.get("mount-point")))' "$RUNNER_TEMP/dmg-mount.plist")"
+          trap 'hdiutil detach "$volume"' EXIT
+          app="$volume/Electroscope.app"
+          codesign --verify --strict --deep "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+      - name: Remove temporary notarization key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary.p8"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-mac
+          if-no-files-found: error
+          path: |
+            release/Electroscope-macOS-arm64.dmg
+            release/Electroscope-macOS-arm64.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mac-release-tests
+          path: test-output/fake/
+
+  publish:
+    name: Publish verified downloads
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+      - name: Require every platform and create checksums
+        run: node scripts/release-assets.mjs artifacts
+      - name: Stage and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            node -e 'if (!require(process.argv[1]).isDraft) throw new Error("Refusing to overwrite a published release")' "$RUNNER_TEMP/release.json"
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "Electroscope $RELEASE_TAG" --notes-file docs/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" artifacts/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+      - name: Verify public downloads without authentication
+        env:
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir downloaded
+          cd downloaded
+          base="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG"
+          for file in SHA256SUMS.txt Electroscope-Windows-x64-Setup.exe Electroscope-Windows-x64-Portable.exe Electroscope-macOS-arm64.dmg Electroscope-macOS-arm64.zip; do
+            curl --fail --location --retry 3 --max-time 300 --output "$file" "$base/$file"
+          done
+          sha256sum --check --strict SHA256SUMS.txt

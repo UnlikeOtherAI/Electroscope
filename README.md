@@ -1,83 +1,77 @@
-# Electroscope
+<p align="center"><img src="build/icon-256.png" alt="Electroscope" width="112" /></p>
 
-<p align="center"><img src="build/icon-256.png" alt="Electroscope icon" width="128" /></p>
+<h1 align="center">Electroscope</h1>
+<p align="center"><strong>Give Claude, Codex, and other agents eyes on your electronics.</strong></p>
+<p align="center">See the same board. Point to the same pin. Work through the next measurement together.</p>
 
-A microscope camera as an MCP server. You watch the live view in a native window; any AI agent on your network can look through the same camera, zoom, focus, and draw on the picture.
+<p align="center">
+  <a href="https://github.com/UnlikeOtherAI/Electroscope/releases/latest/download/Electroscope-Windows-x64-Setup.exe"><img alt="Download for Windows x64" src="https://img.shields.io/badge/Download_for_Windows-x64-0078D4?style=for-the-badge&amp;logo=windows&amp;logoColor=white" /></a>
+  <a href="https://github.com/UnlikeOtherAI/Electroscope/releases/latest/download/Electroscope-macOS-arm64.dmg"><img alt="Download for Mac Apple Silicon" src="https://img.shields.io/badge/Download_for_Mac-Apple_Silicon-222222?style=for-the-badge&amp;logo=apple&amp;logoColor=white" /></a>
+</p>
+<p align="center">
+  <a href="https://github.com/UnlikeOtherAI/Electroscope/releases/latest/download/Electroscope-Windows-x64-Portable.exe">Windows portable</a> ·
+  <a href="https://github.com/UnlikeOtherAI/Electroscope/releases/latest/download/Electroscope-macOS-arm64.zip">Mac ZIP</a> ·
+  <a href="https://github.com/UnlikeOtherAI/Electroscope/releases">All releases</a>
+</p>
+<p align="center">Windows 11 x64 · macOS on Apple Silicon · Free and open source</p>
 
-A camera can usually be opened by one app at a time, so you cannot watch the microscope and also hand a stream to an agent. Electroscope owns the camera, shows it to you, and gives agents still frames and full control over MCP, without interrupting your view.
+Electroscope connects your USB microscope to an agent that supports **MCP**, including Claude Code and Codex. You keep a live view of the board while the agent takes snapshots, inspects close-ups, and draws marks on the picture.
 
-![Electroscope with an agent's marks on a board](docs/screenshot.png)
+Instead of “the little component on the left,” your agent can circle the component, put a crosshair on a test point, or draw an arrow to the pin it wants you to probe. You can draw back to show exactly where you measured. You handle the probes and measurements; Electroscope makes the visual conversation precise.
 
-## Use it
+![Electroscope on Windows, showing a real circuit board with example circles, arrows, crosshairs, and labels](docs/screenshot.png)
 
-Run the app. The title bar shows the address it serves on, for example `http://192.168.1.165:7821/mcp`. Click **Copy prompt for agent** and paste it into Claude Code, Codex, or any agent. The prompt has the IP, the port, how to connect, and every tool.
+*Example marks on a real microscope image. Both you and the agent can add annotations to the same view.*
 
-Or connect directly:
+## A second pair of eyes at your bench
 
-```bash
-claude mcp add --transport http electroscope http://<ip>:7821/mcp
+- **Inspect together.** Ask the agent to look at solder joints, read visible markings, or compare a detail before and after rework.
+- **Make the next probe location clear.** Circles, arrows, crosshairs, boxes, and text turn “measure here” into a specific place on the board.
+- **Keep the detail.** The agent can request a full-resolution crop, follow your zoomed view, or take a sequence of stills.
+- **Stay in control.** Zoom, pan, rotate, mirror, freeze, add a grid, draw your own marks, and save photos while the camera stays open.
+- **Work across your bench.** Run the microscope on one computer and connect an agent from another computer on the same trusted network.
+
+![Electroscope on macOS, zoomed into a circuit board with a grid and crosshair](docs/images/microscope-zoom.png)
+
+*Zoom into the detail you are discussing. The agent can capture that same region without losing the original camera pixels.*
+
+## Get started
+
+1. **Install Electroscope** using a download above. On Mac, open the DMG and drag Electroscope into Applications. On Windows, run the installer or use the portable app.
+2. **Plug in your USB microscope** and open Electroscope. Allow camera access and select the microscope in the camera list.
+3. **Click “Copy prompt for agent.”** Paste it into Claude Code, Codex, or another MCP-capable agent. It contains your camera server’s address, connection instructions, and available tools.
+4. **Start looking at the board together.** Ask for a fresh image, describe the fault, and share your measurements as you go.
+
+Try a prompt like:
+
+> Look at this board. Circle any solder joints worth inspecting more closely, and explain what you see.
+
+> Mark the pin you mean before I put the probe on it.
+
+> I measured 3.3 V at the point I marked. Take another look and suggest the next measurement.
+
+Your agent’s own service or subscription still applies; Electroscope needs no account. It shares still images on request while you watch the live camera view.
+
+## Connect your agent
+
+**Copy prompt for agent** is the quickest way to get the correct address. For Claude Code, you can also add the server directly:
+
+```sh
+claude mcp add --transport http electroscope http://<microscope-computer-ip>:7821/mcp
 ```
 
-Then ask: "Look at the board and circle anything that looks like a solder bridge."
+For Codex or another MCP client, add the **Streamable HTTP MCP URL** shown in Electroscope’s title bar. Use the displayed URL: the port can change if the default is busy.
 
-## What an agent can do
+Agents can take snapshots and sequences, annotate the image, adjust the on-screen view, choose a camera, save photos, and change hardware controls where the camera supports them. [Read the full tool reference →](docs/mcp.md)
 
-- **Look**: `capture_snapshot` (full frame or a full-resolution close-up of any region, or exactly what you have zoomed to), `capture_sequence` for things that change, with focus, brightness and exposure metrics and plain-language hints.
-- **Point**: `annotate` draws circles, crosshairs, rectangles, arrows and text in any colour on your live view. Marks stay on their feature when you zoom. `clear_annotations` removes them.
-- **Control**: `set_camera_controls` (focus, zoom, exposure and so on, only where the camera really obeys), `set_orientation`, `set_view` (zoom, pan, grid and crosshair with colours, freeze), `select_camera`, `list_cameras`, `save_photo`.
+## Your camera, your network
 
-Full reference: [docs/mcp.md](docs/mcp.md).
+Electroscope serves the camera from your computer. Network access is on by default and has no password, so use it on a trusted network. To keep access on the same computer, turn off **Let other computers on the network connect** in Settings.
 
-## What you can do in the window
+If another app has the microscope open, close that app; Electroscope retries automatically. Camera sliders appear only for controls the camera actually responds to. Use the microscope’s physical focus ring when it has no software focus control.
 
-Zoom and pan, grid and crosshair overlays, freeze, rotate and mirror, pick a resolution, save a full-resolution photo, and draw your own circles, crosshairs, rectangles, arrows and text in a colour you pick. **Clear all** removes every mark; Ctrl+Z removes the last one. A live sharpness meter helps you find best focus.
+## Contribute
 
-Camera sliders appear only for controls the camera actually obeys. Many inexpensive UVC cameras accept brightness, contrast and sharpness settings and ignore them; Electroscope tests each control when the camera opens and hides the ones that do nothing.
+Want to build from source, report a problem, or improve a tool? See the [development guide](docs/development.md), [release workflow](docs/releases.md), or [open an issue](https://github.com/UnlikeOtherAI/Electroscope/issues).
 
-## Security
-
-The server has no password. It listens on your network by default so agents on other computers can reach it, which means anyone who can reach the port can look through the camera and control it. Use it on a network you trust, or turn off **Let other computers on the network connect** in Settings to listen on this computer only. Requests that name any host other than an IP address or this computer's own name are refused, which blocks DNS-rebinding attacks from web pages.
-
-On Windows, the first run shows a firewall prompt; allow it on private networks for other computers to connect.
-
-## Install
-
-Windows 11 and macOS. Download a build from the releases page, or run from source:
-
-```bash
-git clone https://github.com/UnlikeOtherAI/Electroscope.git
-cd Electroscope
-npm install
-npm start
-```
-
-Build a package:
-
-```bash
-npm run dist:win    # Windows installer and portable exe, in release/
-npm run dist:mac    # macOS dmg and zip, in release/ (run on a Mac)
-```
-
-For a signed, notarized Mac package and physical-microscope verification, see [the macOS release guide](docs/macos-release.md).
-
-If the app says the camera is busy, another program has it. Close the Camera app, Teams, or a browser tab using the camera; Electroscope keeps retrying and connects as soon as it is free.
-
-## Develop
-
-```bash
-npm run typecheck
-npm test                      # unit tests: tools, transport safety, addresses, prompt, annotations
-npm run test:e2e              # launches the app and drives it over MCP with your real camera
-node scripts/e2e.mjs --fake   # same, with Chromium's synthetic camera (what CI runs)
-npm run icons                 # re-render build/icon.* from build/icon.svg
-```
-
-The end-to-end script drives the real app as an agent would, checks that marks land on the right pixels, and writes screenshots and every captured image to `test-output/`.
-
-- `src/main`: Electron main process and the MCP server (`mcp/tools.ts` defines the tools, `mcp/http.ts` is the Streamable HTTP transport).
-- `src/renderer`: the window. It owns the camera, draws the live view and marks, and answers requests from the main process.
-- `src/shared`: types, IPC channel names, and the agent prompt.
-
-## License
-
-[MIT](LICENSE)
+Made by [UnlikeOtherAI](https://unlikeotherai.com). [MIT licensed](LICENSE).
