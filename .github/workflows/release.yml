@@ -162,6 +162,7 @@ jobs:
     name: Publish verified downloads
     needs: [windows, mac]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: release
     permissions:
       contents: write
@@ -187,3 +188,16 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" artifacts/* --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest
+      - name: Verify public downloads without authentication
+        env:
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir downloaded
+          cd downloaded
+          base="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG"
+          for file in SHA256SUMS.txt Electroscope-Windows-x64-Setup.exe Electroscope-Windows-x64-Portable.exe Electroscope-macOS-arm64.dmg Electroscope-macOS-arm64.zip; do
+            curl --fail --location --retry 3 --max-time 300 --output "$file" "$base/$file"
+          done
+          sha256sum --check --strict SHA256SUMS.txt

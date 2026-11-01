@@ -19,7 +19,7 @@ Windows executables and installers use the existing UnlikeOtherAI Azure Artifact
 
 The Mac app uses the UnlikeOtherAI Developer ID Application identity, hardened runtime, and Apple notarization. The workflow extracts the final ZIP, verifies its signature, stapled ticket, and Gatekeeper acceptance, then runs the packaged app's synthetic-camera suite. It also mounts and verifies the app inside the DMG. Hosted tests use a synthetic camera; they do not claim physical-microscope verification.
 
-Publication waits for both platform jobs. It requires exactly the four expected download files, generates SHA-256 checksums, stages a draft release, uploads every asset, and only then makes the release public. A failed run publishes no partial new release. Rerunning can resume an unpublished draft; it refuses to replace an already published release.
+Publication waits for both platform jobs. It requires exactly the four expected download files, generates SHA-256 checksums, stages a draft release, uploads every asset, and only then makes the release public. Build, test, signing, or upload failures leave the new release unpublished. Rerunning can resume an unpublished draft; it refuses to replace an already published release. The final step downloads every asset through its public URL without authentication and checks its SHA-256 against the manifest.
 
 ## Signing configuration
 
