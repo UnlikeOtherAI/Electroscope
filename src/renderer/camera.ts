@@ -52,6 +52,7 @@ export class CameraSession extends EventTarget {
   /** Controls the camera accepted but did not apply (common on cheap UVC cameras). */
   private unresponsive = new Set<string>();
   private wantedId: string | null = null;
+
   orientations: Record<string, Orientation> = {};
   adjustmentsByCamera: Record<string, ImageAdjustments> = {};
 
@@ -84,6 +85,11 @@ export class CameraSession extends EventTarget {
    * Some UVC cameras hand over a stream and then never send a frame. Saying "LIVE" over a black
    * rectangle in that case is the one thing the window must never do.
    */
+  /** The camera the window is trying to show, even while it is unavailable. */
+  get wanted(): string | null {
+    return this.activeId ?? this.wantedId;
+  }
+
   get hasSignal(): boolean {
     return this.activeId !== null && this.video.videoWidth > 0;
   }
@@ -228,6 +234,7 @@ export class CameraSession extends EventTarget {
     }
     this.opening = false;
     this.busy = false;
+    this.retries = 0;
     this.readTrack();
     this.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.activeId = null;
@@ -278,8 +285,14 @@ export class CameraSession extends EventTarget {
 
   /** Called on a timer: if another app had the camera, take it as soon as it is free. */
   async retryIfBusy(): Promise<void> {
-    if (this.busy && !this.activeId && this.wantedId) await this.open(this.wantedId).catch(() => undefined);
+    if (this.busy && !this.activeId && this.wantedId) {
+      this.retries++;
+      await this.open(this.wantedId).catch(() => undefined);
+    }
   }
+
+  /** How many times the camera has been retried since it was last available. */
+  retries = 0;
 
   private closeStream(): void {
     this.stream?.getTracks().forEach((t) => t.stop());

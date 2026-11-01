@@ -192,10 +192,48 @@ function applyLiveFilter(): void {
   $('zoomer').style.filter = adjustmentFilter(session.adjustments);
 }
 
+// ---------- popovers ----------
+const POPOVERS: Array<[button: string, panel: string]> = [
+  ['camera-button', 'camera-popover'],
+  ['image-button', 'image-popover'],
+];
+
+function closePopovers(except?: string): void {
+  for (const [button, panel] of POPOVERS) {
+    if (panel === except) continue;
+    $(panel).hidden = true;
+    $(button).setAttribute('aria-expanded', 'false');
+  }
+}
+
+function wirePopovers(): void {
+  for (const [button, panel] of POPOVERS) {
+    $(button).addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = $(panel).hidden;
+      closePopovers(open ? panel : undefined);
+      $(panel).hidden = !open;
+      $(button).setAttribute('aria-expanded', String(open));
+    });
+    $(panel).addEventListener('click', (e) => e.stopPropagation());
+  }
+  document.addEventListener('click', () => closePopovers());
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePopovers();
+  });
+}
+
 // ---------- cameras ----------
 function renderCameras(): void {
+  const cam = session.activeCamera;
+  $('camera-name').textContent = cam?.label ?? (session.cameras.length ? 'Select a camera' : 'No camera');
+  $('camera-sub').textContent = cam
+    ? session.width
+      ? `${session.width} × ${session.height}${session.fps ? ` · ${session.fps} fps` : ''}`
+      : 'opening…'
+    : `${session.cameras.length} available`;
+
   const list = $('camera-list');
-  $('camera-count').textContent = session.cameras.length ? String(session.cameras.length) : '';
   list.replaceChildren();
   if (session.cameras.length === 0) {
     list.append(h('li', { class: 'list-empty', textContent: 'No cameras detected.' }));
@@ -216,6 +254,7 @@ function renderCameras(): void {
     );
     if (active) btn.append(h('span', { class: 'live-dot', title: 'Live' }));
     btn.addEventListener('click', () => {
+      closePopovers();
       if (!active) void switchCamera(cam.id);
     });
     list.append(h('li', {}, btn));
@@ -224,6 +263,7 @@ function renderCameras(): void {
 
 async function switchCamera(id: string): Promise<void> {
   try {
+    resetFocusPeak();
     await session.open(id, settings.resolutions[id]);
     save({ lastCameraId: id });
     viewer.clearAnnotations();
@@ -236,6 +276,15 @@ async function switchCamera(id: string): Promise<void> {
 }
 
 // ---------- the stage ----------
+/** Counts down to the next automatic reconnect, so "it retries" is something you can watch. */
+let nextRetryAt = 0;
+let retryAttempt = 0;
+function retryCountdownText(): string {
+  const secs = Math.max(0, Math.ceil((nextRetryAt - Date.now()) / 1000));
+  return `Retrying in ${secs}s · attempt ${retryAttempt}`;
+}
+
+
 function renderHud(): void {
   const signal = session.hasSignal;
   $('hud-cam').textContent = session.activeCamera?.label ?? '—';
@@ -252,17 +301,45 @@ function renderHud(): void {
   $('tb-zoom-reset').textContent = `${Math.round(viewer.zoom * 100)}%`;
 }
 
+const FOCUS_BARS = 16;
 let focusPeak = 1;
+let focusHistory: number[] = [];
+
+function buildFocusBars(): void {
+  $('focus-bars').replaceChildren(...Array.from({ length: FOCUS_BARS }, () => h('i')));
+}
+
+/** The peak belongs to one scene; a new camera or a new frame size invalidates it. */
+function resetFocusPeak(): void {
+  focusPeak = 1;
+  focusHistory = [];
+}
+
 function renderFocus(): void {
   const score = session.focusScore;
+  const val = $('focus-val');
+  const peakEl = $('focus-peak');
+  const bars = $('focus-bars').children;
   if (score === null) {
-    $('focus-val').textContent = '—';
-    ($('focus-bar') as HTMLElement).style.width = '0%';
+    val.textContent = '—';
+    peakEl.textContent = '';
+    for (const b of bars) (b as HTMLElement).className = '';
     return;
   }
   focusPeak = Math.max(score, focusPeak * 0.995);
-  ($('focus-bar') as HTMLElement).style.width = `${(Math.min(1, score / Math.max(focusPeak, 1)) * 100).toFixed(0)}%`;
-  $('focus-val').textContent = score >= 100 ? Math.round(score).toString() : score.toFixed(1);
+  focusHistory = [...focusHistory, score].slice(-FOCUS_BARS);
+  val.textContent = score >= 100 ? Math.round(score).toLocaleString() : score.toFixed(1);
+  peakEl.textContent = focusPeak > score * 1.02 ? `peak ${Math.round(focusPeak).toLocaleString()}` : 'at peak';
+
+  const top = Math.max(focusPeak, 1);
+  for (let i = 0; i < FOCUS_BARS; i++) {
+    const el = bars[i] as HTMLElement | undefined;
+    if (!el) continue;
+    const v = focusHistory[focusHistory.length - FOCUS_BARS + i];
+    const ratio = v === undefined ? 0 : Math.min(1, v / top);
+    el.style.height = `${Math.max(3, ratio * 20).toFixed(1)}px`;
+    el.className = v === undefined ? '' : ratio > 0.96 ? 'peak' : 'lit';
+  }
 }
 
 /**
@@ -272,6 +349,8 @@ function renderFocus(): void {
 function renderStageState(): void {
   const has = session.activeId !== null && session.width > 0;
   $('frame').hidden = !has;
+  // The readouts belong to a picture; with no picture they would be describing nothing.
+  $('hud-tl').hidden = !has;
   const panel = $('empty');
   panel.hidden = has;
   if (has) {
@@ -280,6 +359,7 @@ function renderStageState(): void {
   }
 
   const retry = $<HTMLButtonElement>('empty-retry');
+  const note = $('empty-retry-note');
   const setState = (icon: IconName | 'spinner', title: string, text: string, retryLabel?: string) => {
     $('empty-art').replaceChildren(icon === 'spinner' ? h('span', { class: 'spinner lg' }) : ico(icon, 'ico'));
     $('empty-title').textContent = title;
@@ -288,20 +368,18 @@ function renderStageState(): void {
     if (retryLabel) retry.textContent = retryLabel;
   };
 
+  note.hidden = true;
   if (session.opening) {
-    const name = session.cameras.find((c) => c.id === session.activeId)?.label ?? 'the camera';
-    setState('spinner', `Opening ${name}…`, 'Your live view will appear here in a moment.');
+    const name = session.cameras.find((c) => c.id === session.wanted)?.label ?? 'the camera';
+    setState('spinner', `Opening ${name}…`, 'Waiting for the first frame.');
   } else if (session.busy) {
-    setState(
-      'camera',
-      'This camera is in use',
-      'Another app has it. Close that app and Electroscope will pick it up by itself — or try now.',
-      'Try now',
-    );
+    setState('camera', 'This camera is in use', 'Another app has it. Close that app — Electroscope reconnects by itself.', 'Retry now');
+    note.hidden = false;
+    note.textContent = retryCountdownText();
   } else if (session.cameras.length === 0) {
-    setState('plug', 'Connect your microscope', session.error ?? 'No camera found. Plug it in and it will appear here.', 'Scan again');
+    setState('plug', 'Connect a microscope to begin', session.error ?? 'No camera detected. Plug in a USB camera and it will appear here.', 'Scan again');
   } else {
-    setState('camera', 'Camera unavailable', session.error ?? 'Pick a camera from the list on the left.', 'Try again');
+    setState('camera', 'Camera unavailable', session.error ?? 'Pick a camera from the list at the top left.', 'Try again');
   }
 }
 
@@ -439,6 +517,7 @@ function renderAdjustments(): void {
     if (v) v.textContent = `${Math.round(a[key] * 100)}%`;
   }
   $<HTMLButtonElement>('adjust-reset').hidden = isNeutral(a);
+  $('image-dirty').hidden = isNeutral(a);
 }
 
 // ---------- marks ----------
@@ -446,23 +525,28 @@ function renderMarks(): void {
   const list = $('marks-list');
   const marks = viewer.annotations;
   $('marks-count').textContent = marks.length ? String(marks.length) : '';
+  $('marks-note').textContent = marks.length
+    ? 'Marks stay on their feature as you zoom'
+    : 'Pick a tool on the left, or let an agent point at something';
   $<HTMLButtonElement>('tb-clear-all').disabled = marks.length === 0;
   $<HTMLButtonElement>('tb-undo').disabled = marks.length === 0;
   list.replaceChildren();
   if (marks.length === 0) {
-    list.append(h('li', { class: 'list-empty', textContent: 'Nothing drawn yet. Pick a tool below the picture, or let an agent point at something.' }));
+    list.append(h('li', { class: 'list-empty', textContent: 'Nothing drawn on this view yet.' }));
     return;
   }
   for (const m of marks) {
     const swatch = h('span', { class: 'mark-swatch' });
     swatch.style.setProperty('--c', m.color);
     const title = m.type === 'text' ? (m.text ?? 'Text') : (m.label ?? humanize(m.type));
+    const author = m.author ?? 'You';
     const row = h(
       'li',
       { class: 'mark-item' },
       swatch,
       ico(MARK_ICON[m.type], 'ico small'),
-      h('span', { class: 'meta' }, h('span', { class: 'name', textContent: title, title }), h('span', { class: 'sub', textContent: m.author ?? 'You' })),
+      h('span', { class: 'meta' }, h('span', { class: 'name', textContent: title, title })),
+      h('span', { class: `author${author === 'You' ? '' : ' agent'}`, textContent: author }),
     );
     const del = h('button', { class: 'icon-btn small quiet', type: 'button', title: `Remove this ${m.type}`, innerHTML: icons.trash });
     del.setAttribute('aria-label', `Remove this ${m.type}`);
@@ -476,16 +560,18 @@ function renderToolbar(): void {
   $('tb-grid').setAttribute('aria-pressed', String(viewer.grid));
   $('tb-cross').setAttribute('aria-pressed', String(viewer.crosshair));
   $('tb-freeze').setAttribute('aria-pressed', String(viewer.frozen));
+  $('freeze-label').textContent = viewer.frozen ? 'Frozen' : 'Freeze';
+  $('tool-none').setAttribute('aria-pressed', String(viewer.tool === null));
   for (const t of ['circle', 'crosshair', 'rect', 'arrow', 'text'] as const) {
     $(`tool-${t}`).setAttribute('aria-pressed', String(viewer.tool === t));
   }
   $('mirror').setAttribute('aria-pressed', String(session.orientation.mirror));
   const hints: Record<string, string> = {
-    circle: 'Circle — drag from the centre outwards.',
-    crosshair: 'Crosshair — click where you want it.',
-    rect: 'Rectangle — drag a box.',
-    arrow: 'Arrow — drag from the tail to the point.',
-    text: 'Text — click where the words should start.',
+    circle: 'Drag from the centre outwards',
+    crosshair: 'Click where you want it',
+    rect: 'Drag a box',
+    arrow: 'Drag from the tail to the point',
+    text: 'Click where the words should start',
   };
   const hint = $('hint-text');
   hint.textContent = viewer.tool ? (hints[viewer.tool] ?? '') : '';
@@ -532,14 +618,23 @@ function renderServer(): void {
   }
   prompt.disabled = !serverInfo.running;
   $<HTMLButtonElement>('copy-address').disabled = !serverInfo.running;
-  $('tb-subtitle').textContent = session.activeCamera?.label ?? (serverInfo.running ? 'No camera' : 'Starting…');
+  $('tb-subtitle').textContent = serverInfo.running
+    ? clients.length
+      ? `${clients.length === 1 ? 'An agent is' : `${clients.length} agents are`} sharing this lens`
+      : 'One lens, ready to share'
+    : 'Starting…';
+  $('wb-foot-text').textContent = clients.length
+    ? 'Everything an agent does appears above as it happens.'
+    : 'Frames stay on this computer until an agent asks for one.';
 }
 
 function renderAgents(): void {
   const list = $('agent-list');
   list.replaceChildren();
   if (clients.length === 0) {
-    list.append(h('li', { class: 'list-empty', textContent: 'No agent connected yet.' }));
+    list.append(
+      h('li', { class: 'list-empty', textContent: 'No agent yet. Copy the prompt below into Claude Code, Codex or any MCP client.' }),
+    );
     return;
   }
   for (const c of clients) {
@@ -620,14 +715,14 @@ function wireStatic(): void {
   $('open-settings').innerHTML = icons.settings;
   $('refresh').innerHTML = icons.refresh;
   $('copy-address').innerHTML = icons.copy;
+  buildFocusBars();
   $('copy-prompt').innerHTML = `${icons.copy}<span>Copy prompt for agent</span>`;
   $('tb-zoom-out').innerHTML = icons.zoomOut;
   $('tb-zoom-in').innerHTML = icons.zoomIn;
   $('tb-grid').innerHTML = icons.grid;
   $('tb-cross').innerHTML = icons.crosshair;
-  $('tb-freeze').innerHTML = icons.freeze;
   $('tb-save').innerHTML = `${icons.save}<span>Save photo</span>`;
-  $('tb-undo').innerHTML = icons.undo;
+  $('tool-none').innerHTML = icons.hand;
   $('tool-circle').innerHTML = icons.circle;
   $('tool-crosshair').innerHTML = icons.plus;
   $('tool-rect').innerHTML = icons.rect;
@@ -646,6 +741,8 @@ function wireStatic(): void {
   $('copy-address').addEventListener('click', () => void copy(serverInfo.url, 'Address'));
   $('refresh').addEventListener('click', () => void session.refresh());
   $('status-pill').addEventListener('click', () => openSettings('connection'));
+  $('tool-none').addEventListener('click', () => viewer.setTool(null));
+  wirePopovers();
   $('open-settings').addEventListener('click', () => openSettings('general'));
   $('open-photos').addEventListener('click', () => void api.openPhotos());
 
@@ -659,6 +756,8 @@ function wireStatic(): void {
   $('tb-freeze').addEventListener('click', toggleFreeze);
   $('tb-clear-all').addEventListener('click', () => viewer.clearAnnotations());
   $('tb-undo').addEventListener('click', () => viewer.undo());
+  // The picture is the only place a tool makes sense, so leaving it puts the hand back.
+  $('stage').addEventListener('pointerdown', () => closePopovers());
   $('adjust-reset').addEventListener('click', () => {
     const id = session.activeId;
     if (!id) return;
@@ -702,6 +801,7 @@ function wireStatic(): void {
     const id = session.activeId;
     if (!id || !w || !hgt) return;
     try {
+      resetFocusPeak();
       await session.open(id, { width: w, height: hgt });
       save({ resolutions: { ...settings.resolutions, [id]: { width: w, height: hgt } } });
       // Cameras silently fall back to the nearest mode they have; say so rather than pretend.
@@ -950,7 +1050,19 @@ async function main(): Promise<void> {
     if (event.thumbnail) flashAgent(event);
   });
 
-  setInterval(() => void session.retryIfBusy(), 3000);
+  setInterval(() => {
+    if (session.busy && !session.activeId) {
+      nextRetryAt = Date.now() + 3000;
+      retryAttempt = session.retries + 1;
+      void session.retryIfBusy();
+    }
+  }, 3000);
+  // One second apart, so the countdown on the stage actually counts.
+  setInterval(() => {
+    if (session.busy && !session.activeId && !$('empty').hidden) {
+      $('empty-retry-note').textContent = retryCountdownText();
+    }
+  }, 500);
   // Relative times would otherwise freeze at "just now".
   setInterval(() => {
     if (activity.length) renderActivity();

@@ -56,9 +56,10 @@ await page.setViewportSize({ width: 1360, height: 860 }).catch(() => undefined);
 
 if (process.env.ELECTROSCOPE_CAMERA) {
   const camera = process.env.ELECTROSCOPE_CAMERA;
+  await page.click('#camera-button');
   await page.locator('#camera-list button').filter({ hasText: camera }).click();
   await page.waitForFunction((label) => {
-    return document.getElementById('hud-cam')?.textContent.includes(label)
+    return document.getElementById('camera-name')?.textContent.includes(label)
       && document.getElementById('video')?.videoWidth > 0;
   }, camera, { timeout: 30000 });
 }
@@ -68,7 +69,7 @@ await step('window shows a live camera', async () => {
   const info = await page.evaluate(() => ({
     w: document.getElementById('video').videoWidth,
     h: document.getElementById('video').videoHeight,
-    cam: document.getElementById('hud-cam').textContent,
+    cam: document.getElementById('camera-name').textContent,
   }));
   console.log(`       ${info.cam} ${info.w}x${info.h}`);
   assert.ok(info.w > 0 && info.h > 0);
@@ -116,6 +117,12 @@ const save = async (name, img) => {
   return file;
 };
 const call = (name, args = {}) => client.callTool({ name, arguments: args });
+const meanLuma = async (img) => {
+  const { data, info } = await sharp(Buffer.from(img.data, 'base64')).raw().toBuffer({ resolveWithObject: true });
+  let sum = 0;
+  for (let i = 0; i < data.length; i += info.channels) sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+  return sum / (data.length / info.channels);
+};
 const pixel = async (img, nx, ny) => {
   const { data, info } = await sharp(Buffer.from(img.data, 'base64')).raw().toBuffer({ resolveWithObject: true });
   const x = Math.min(info.width - 1, Math.round(nx * info.width));
@@ -154,11 +161,13 @@ await step('the UI shows only camera controls that really work', async () => {
   await page.waitForTimeout(fake ? 1500 : 6000); // probing runs in the background after the camera opens
   const s = json(await call('get_status'));
   const working = s.controls.filter((c) => c.responsive !== false).map((c) => c.name).sort();
+  await page.click('#image-button');
   const shown = await page.evaluate(() => [...document.querySelectorAll('#controls .control')].map((e) => e.dataset.name).sort());
   console.log(`       working: [${working.join(', ')}]  shown: [${shown.join(', ')}]  dead hidden: [${s.controls.filter((c) => c.responsive === false).map((c) => c.name).join(', ')}]`);
   assert.deepEqual(shown, working);
   const cardHidden = await page.evaluate(() => document.getElementById('controls-card').hidden);
   assert.equal(cardHidden, working.length === 0);
+  await page.keyboard.press('Escape');
 });
 
 await step('list_cameras', async () => {
@@ -399,16 +408,15 @@ await step('the window shows the agent and what it has been doing', async () => 
 });
 
 await step('picture adjustments reach the window and the captured image', async () => {
-  const dark = await pixel(images(await call('capture_snapshot', { max_width: 320 }))[0], 0.5, 0.5);
+  const dark = await meanLuma(images(await call('capture_snapshot', { max_width: 320 }))[0]);
   const set = json(await call('set_image_adjustments', { brightness: 1.8 }));
   assert.equal(set.image_adjustments.brightness, 1.8);
   await page.waitForTimeout(400);
   const filter = await page.evaluate(() => document.getElementById('zoomer').style.filter);
   assert.match(filter, /brightness\(1\.8\)/, `live view not adjusted: "${filter}"`);
-  const bright = await pixel(images(await call('capture_snapshot', { max_width: 320 }))[0], 0.5, 0.5);
-  const lum = ([r, g, b]) => r + g + b;
-  console.log(`       centre pixel ${dark} -> ${bright}`);
-  assert.ok(lum(bright) > lum(dark) + 20, `capture should be brighter, got ${dark} -> ${bright}`);
+  const bright = await meanLuma(images(await call('capture_snapshot', { max_width: 320 }))[0]);
+  console.log(`       mean luma ${dark.toFixed(1)} -> ${bright.toFixed(1)}`);
+  assert.ok(bright > dark + 8, `capture should be brighter, got ${dark.toFixed(1)} -> ${bright.toFixed(1)}`);
   const bad = await call('set_image_adjustments', { brightness: 9 }).catch((e) => ({ isError: true, content: [{ type: 'text', text: e.message }] }));
   assert.ok(bad.isError, 'out-of-range brightness should be refused');
   await call('set_image_adjustments', { brightness: 1 });

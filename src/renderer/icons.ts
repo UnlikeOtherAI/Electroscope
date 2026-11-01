@@ -24,6 +24,8 @@ export const icons = {
   arrow: base('<path d="M5 19 19 5M10 5h9v9"/>'),
   text: base('<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>'),
   plus: base('<path d="M12 4v16M4 12h16"/>'),
+  chevron: base('<path d="m7 10 5 5 5-5"/>', 14),
+  hand: base('<path d="M8 12V5.5a1.5 1.5 0 0 1 3 0V11m0-1V4.5a1.5 1.5 0 0 1 3 0V11m0-.5V6a1.5 1.5 0 0 1 3 0v7a7 7 0 0 1-7 7h-.6a5 5 0 0 1-3.8-1.8L4 15.5a1.6 1.6 0 0 1 2.4-2.1z"/>'),
   bolt: base('<path d="M13 3 5.5 13.5H11l-1 7.5 7.5-10.5H12z"/>'),
   shield: base('<path d="M12 3.2 19 6v5.6c0 4-2.8 7.3-7 9.2-4.2-1.9-7-5.2-7-9.2V6z"/>'),
   plug: base('<path d="M9 3v5M15 3v5"/><path d="M6.5 8h11v3a5.5 5.5 0 0 1-11 0z"/><path d="M12 16.5V21"/>'),
