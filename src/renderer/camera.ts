@@ -31,6 +31,13 @@ const MODE_FOR: Record<string, { mode: string; value: string }> = {
 };
 
 const PREFERRED_SIZE = { width: 1920, height: 1080 };
+/** How long a camera may hold a stream without sending a frame before it is reopened. */
+const STALL_AFTER_MS = 6000;
+/**
+ * Reopening a silent camera helps when a driver loses the stream once. Past this many tries it
+ * is not going to start, and cycling it forever only hides the problem, so we stop and say so.
+ */
+const MAX_STALL_REOPENS = 6;
 
 type Caps = Record<string, unknown>;
 
@@ -76,6 +83,9 @@ export class CameraSession extends EventTarget {
     this.focusTimer = window.setInterval(() => this.updateFocus(), 300);
     const tick = () => {
       this.frames++;
+      this.retries = 0;
+      this.stallReopens = 0;
+      this.gaveUp = false;
       this.video.requestVideoFrameCallback(tick);
     };
     this.video.requestVideoFrameCallback(tick);
@@ -194,6 +204,7 @@ export class CameraSession extends EventTarget {
     this.wantedId = id;
     this.unresponsive.clear();
     this.opening = true;
+    this.gaveUp = false;
     this.changed();
     const want = size ?? PREFERRED_SIZE;
     try {
@@ -234,7 +245,7 @@ export class CameraSession extends EventTarget {
     }
     this.opening = false;
     this.busy = false;
-    this.retries = 0;
+    this.openedAt = Date.now();
     this.readTrack();
     this.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       this.activeId = null;
@@ -283,16 +294,36 @@ export class CameraSession extends EventTarget {
     }
   }
 
-  /** Called on a timer: if another app had the camera, take it as soon as it is free. */
-  async retryIfBusy(): Promise<void> {
+  /**
+   * Called on a timer. Two things are worth retrying: a camera another app is holding, and one
+   * that handed over a stream and then never sent a frame — common on cheap UVC microscopes,
+   * and indistinguishable from a working camera pointed at something black unless we reopen it.
+   */
+  async retryIfStuck(): Promise<void> {
     if (this.busy && !this.activeId && this.wantedId) {
       this.retries++;
       await this.open(this.wantedId).catch(() => undefined);
+      return;
+    }
+    if (this.activeId && this.stream && !this.hasSignal && Date.now() - this.openedAt > STALL_AFTER_MS) {
+      if (this.stallReopens >= MAX_STALL_REOPENS) {
+        this.gaveUp = true;
+        this.changed();
+        return;
+      }
+      this.stallReopens++;
+      this.retries++;
+      await this.open(this.activeId).catch(() => undefined);
     }
   }
 
-  /** How many times the camera has been retried since it was last available. */
+  /** How many times the camera has been retried since it was last delivering. */
   retries = 0;
+  /** When the current stream was opened, so a silent camera can be given a fair wait. */
+  private openedAt = 0;
+  private stallReopens = 0;
+  /** True once a camera has been reopened as often as is worth trying and still sends nothing. */
+  gaveUp = false;
 
   private closeStream(): void {
     this.stream?.getTracks().forEach((t) => t.stop());

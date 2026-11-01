@@ -295,6 +295,7 @@ ul { list-style: none; margin: 0; padding: 0; }
   border: 1px solid var(--hud-line); color: var(--hud-text); font-size: 12px;
 }
 .no-signal .spinner { border-color: rgba(255, 255, 255, 0.18); border-top-color: var(--warn); flex: none; }
+.no-signal .spinner.stopped { animation: none; border-top-color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 
 .tool-hint {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 6;

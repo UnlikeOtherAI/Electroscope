@@ -301,7 +301,12 @@ function renderHud(): void {
   live.classList.toggle('stalled', !signal);
   live.lastChild!.textContent = viewer.frozen ? 'FROZEN' : signal ? 'LIVE' : 'NO SIGNAL';
   // Shown exactly when the picture is on screen but nothing is arriving in it.
-  $('no-signal').hidden = signal || !showingFrame();
+  const noSignal = $('no-signal');
+  noSignal.hidden = signal || !showingFrame();
+  noSignal.querySelector('.spinner')!.classList.toggle('stopped', session.gaveUp);
+  noSignal.querySelector('span:last-child')!.textContent = session.gaveUp
+    ? 'This camera opened but has never sent a frame. Check its cable and light, try another resolution, or pick a different camera.'
+    : 'Connected, but this camera has not sent a frame yet. Check its light and the focus ring.';
   const zoom = $('hud-zoom');
   zoom.hidden = viewer.zoom <= 1.001;
   zoom.textContent = `${Math.round(viewer.zoom * 100)}%`;
@@ -822,7 +827,8 @@ function wireStatic(): void {
 
   $('tb-save').addEventListener('click', () => void savePhoto());
   $('empty-retry').addEventListener('click', () => {
-    if (session.busy && session.activeId === null) void session.retryIfBusy();
+    void session.retryIfStuck();
+    if (session.busy && session.activeId === null) void session.retryIfStuck();
     else void session.init(settings.lastCameraId).then(renderAll);
   });
 }
@@ -1058,11 +1064,9 @@ async function main(): Promise<void> {
   });
 
   setInterval(() => {
-    if (session.busy && !session.activeId) {
-      nextRetryAt = Date.now() + 3000;
-      retryAttempt = session.retries + 1;
-      void session.retryIfBusy();
-    }
+    nextRetryAt = Date.now() + 3000;
+    retryAttempt = session.retries + 1;
+    void session.retryIfStuck();
   }, 3000);
   // One second apart, so the countdown on the stage actually counts.
   setInterval(() => {
