@@ -51,7 +51,9 @@ Measured, stock `node_modules/electron`, nothing re-signed:
 | `open -n Electron.app --args <root>` | prompt shown, `true` | ~24 fps |
 
 So `npm start` runs `scripts/start.mjs`, which uses `open` on macOS and spawns the binary directly
-everywhere else. A granted permission does **not** rescue a shell launch afterwards: the grant
+everywhere else. `open` opens the output path itself, so an inherited pipe such as `/dev/stdout`
+fails the launch with `-10810`; the script points it at a temporary file and tails that, which
+keeps the console log in the terminal. A granted permission does **not** rescue a shell launch afterwards: the grant
 belongs to the app, while attribution still lands on the shell.
 
 Re-signing the development build is not needed. The ad-hoc, linker-signed bundle npm downloads
