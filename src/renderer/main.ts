@@ -618,6 +618,12 @@ function renderToolbar(): void {
 }
 
 // ---------- server, agents, activity ----------
+
+/** Past this with nothing asked of us, an agent is connected but not looking. */
+const QUIET_AFTER_MS = 90_000;
+
+const watching = (): number => clients.filter((c) => Date.now() - Date.parse(c.lastSeen) <= QUIET_AFTER_MS).length;
+
 function renderServer(): void {
   const address = $('address');
   const prompt = $<HTMLButtonElement>('copy-prompt');
@@ -632,12 +638,19 @@ function renderServer(): void {
     const where = serverInfo.network ? 'Listening on your network' : 'Listening on this computer only';
     $('conn-text').textContent = where;
     dot('conn-dot', 'ok');
-    $('status-text').textContent = clients.length
-      ? `${clients.length} agent${clients.length > 1 ? 's' : ''}`
-      : serverInfo.network
+    // "2 agents" over a board nobody is looking at is the kind of small lie that costs trust,
+    // so the pill counts the ones at work and owns up to the rest.
+    const live = watching();
+    $('status-text').textContent = !clients.length
+      ? serverInfo.network
         ? 'Listening'
-        : 'This computer only';
-    dot('status-dot', clients.length ? 'busy' : 'ok');
+        : 'This computer only'
+      : live === clients.length
+        ? `${live} agent${live > 1 ? 's' : ''}`
+        : live
+          ? `${live} of ${clients.length} agents`
+          : `${clients.length} idle`;
+    dot('status-dot', live ? 'busy' : 'ok');
     $('lock-hint').textContent = serverInfo.network ? 'No password' : 'Local only';
   } else if (serverInfo.error) {
     address.textContent = 'Server not running';
@@ -657,11 +670,13 @@ function renderServer(): void {
   }
   prompt.disabled = !serverInfo.running;
   $<HTMLButtonElement>('copy-address').disabled = !serverInfo.running;
-  $('tb-subtitle').textContent = serverInfo.running
-    ? clients.length
-      ? `${clients.length === 1 ? 'An agent is' : `${clients.length} agents are`} sharing this lens`
-      : 'One lens, ready to share'
-    : 'Starting…';
+  $('tb-subtitle').textContent = !serverInfo.running
+    ? 'Starting…'
+    : watching()
+      ? `${watching() === 1 ? 'An agent is' : `${watching()} agents are`} sharing this lens`
+      : clients.length
+        ? `${clients.length === 1 ? 'An agent is' : `${clients.length} agents are`} connected, but idle`
+        : 'One lens, ready to share';
   $('wb-foot-text').textContent = clients.length
     ? 'Everything an agent does appears above as it happens.'
     : 'Frames stay on this computer until an agent asks for one.';
@@ -677,18 +692,24 @@ function renderAgents(): void {
     return;
   }
   for (const c of clients) {
+    // An agent that has gone quiet is still connected, but saying only when it arrived would
+    // let it pass for someone who is watching. Say when it was last heard from instead.
+    const quiet = Date.now() - Date.parse(c.lastSeen) > QUIET_AFTER_MS;
     list.append(
       h(
         'li',
-        { class: 'agent-item' },
+        { class: quiet ? 'agent-item quiet' : 'agent-item' },
         h('span', { class: 'agent-mark' }, ico('bolt', 'ico small')),
         h(
           'span',
           { class: 'meta' },
           h('span', { class: 'name', textContent: c.name, title: `${c.name} ${c.version}`.trim() }),
-          h('span', { class: 'sub', textContent: `Connected ${relTime(c.connectedAt)}` }),
+          h('span', {
+            class: 'sub',
+            textContent: quiet ? `Last active ${relTime(c.lastSeen)}` : `Connected ${relTime(c.connectedAt)}`,
+          }),
         ),
-        h('span', { class: 'live-dot', title: 'Connected' }),
+        h('span', { class: 'live-dot', title: quiet ? 'Connected, but idle' : 'Connected' }),
       ),
     );
   }
@@ -1104,10 +1125,17 @@ async function main(): Promise<void> {
       $('empty-retry-note').textContent = retryCountdownText();
     }
   }, 500);
-  // Relative times would otherwise freeze at "just now".
+  // Relative times would otherwise freeze at "just now". The agent list is re-read rather than
+  // re-rendered: whether an agent is still working is a fact about its last request, and the main
+  // process only announces the list when one joins or leaves.
   setInterval(() => {
     if (activity.length) renderActivity();
-    if (clients.length) renderAgents();
+    if (!clients.length) return;
+    void api.getClients().then((list) => {
+      clients = list;
+      renderAgents();
+      renderServer();
+    }, () => undefined);
   }, 15_000);
 
   cameraAccess = await api.getCameraAccess().catch(() => 'unknown' as CameraAccess);

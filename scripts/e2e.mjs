@@ -443,6 +443,37 @@ await step('requests from a foreign Origin or Host are refused', async () => {
   assert.equal(code, 403);
 });
 
+await step('an agent that walks away stops being listed as watching', async () => {
+  const second = new Client({ name: 'electroscope-visitor', version: '1.0.0' });
+  await second.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
+  await second.listTools();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('#agent-list .name')].some((n) => n.textContent === 'electroscope-visitor'),
+    null,
+    { timeout: 10000 },
+  );
+
+  // The SDK closes its transport locally without a DELETE, which is how agents really leave.
+  await second.close();
+  await page.waitForFunction(
+    () => ![...document.querySelectorAll('#agent-list .name')].some((n) => n.textContent === 'electroscope-visitor'),
+    null,
+    { timeout: 25000 },
+  );
+  const names = await page.evaluate(() => [...document.querySelectorAll('#agent-list .name')].map((n) => n.textContent));
+  assert.deepEqual(names, ['electroscope-e2e'], `the working agent must stay listed: ${JSON.stringify(names)}`);
+
+  // Whether an agent counts as watching is read from its last request, so that has to keep
+  // moving — the window re-reads the list rather than trusting the copy it got on connect.
+  const lastSeen = async () =>
+    (await page.evaluate(() => window.electroscope.getClients())).find((c) => c.name === 'electroscope-e2e')?.lastSeen;
+  const before = await lastSeen();
+  await new Promise((r) => setTimeout(r, 1100));
+  await call('get_status');
+  const after = await lastSeen();
+  assert.ok(Date.parse(after) > Date.parse(before), `lastSeen must advance with work: ${before} -> ${after}`);
+});
+
 await step('a camera the operating system blocks is named as that, not as a dead cable', async () => {
   const tell = async (access) => {
     await app.evaluate(({ BrowserWindow }, a) => {

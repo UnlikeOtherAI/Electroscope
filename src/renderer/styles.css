@@ -398,6 +398,9 @@ ul { list-style: none; margin: 0; padding: 0; }
 .agent-item { background: var(--agent-fill); border-radius: var(--r-md); padding: 10px; margin-bottom: 2px; }
 .agent-mark { width: 26px; height: 26px; border-radius: var(--r-sm); flex: none; display: grid; place-items: center; background: color-mix(in srgb, var(--agent) 22%, transparent); color: var(--agent); }
 .agent-item .live-dot { background: var(--agent); }
+.agent-item.quiet { background: transparent; box-shadow: inset 0 0 0 1px var(--line-soft); }
+.agent-item.quiet .agent-mark { background: var(--raised); color: var(--text-3); }
+.agent-item.quiet .live-dot { background: var(--text-3); animation: none; }
 
 .activity-item { align-items: flex-start; gap: 9px; padding: 7px; }
 .activity-item .thumb { width: 38px; height: 28px; border-radius: 5px; flex: none; object-fit: cover; background: var(--view); }

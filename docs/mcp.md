@@ -18,6 +18,21 @@ Any client that supports remote HTTP MCP servers can use the URL. For clients th
 { "mcpServers": { "electroscope": { "command": "npx", "args": ["-y", "mcp-remote", "http://<ip>:7821/mcp"] } } }
 ```
 
+### Disconnecting
+
+The window names every connected agent, so it matters that the list is true.
+
+Send `DELETE /mcp` with your `mcp-session-id` when you are done and the agent disappears from the
+window at once. The TypeScript SDK's `client.close()` does **not** do this — it only aborts
+locally — so Electroscope also watches the server-to-client event stream: when that drops and does
+not come back within ten seconds, the agent is dropped. A reconnect inside that window keeps the
+session, and so does any other request.
+
+An agent that uses neither — no `DELETE`, no event stream — cannot be detected leaving. It keeps
+its session until it has been idle for 30 minutes, and the window stops counting it as watching
+after 90 seconds of silence: it is listed as idle, with when it was last heard from, rather than
+as a second pair of eyes on the board.
+
 ## Coordinates
 
 Positions are normalised **0..1 in the oriented frame**: `x` across, `y` down, `(0,0)` top-left, after any rotation or mirroring. Capture `region`s, marks, and the view centre all use them, so an agent can look at a frame and then point at exactly what it saw. Sizes are fractions of the frame width unless noted.
