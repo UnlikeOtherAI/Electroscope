@@ -1,6 +1,7 @@
 import type {
   ActivityEvent,
   Annotation,
+  CameraAccess,
   CameraControl,
   ClientInfo,
   ImageAdjustments,
@@ -281,6 +282,28 @@ function showingFrame(): boolean {
   return session.activeId !== null && session.width > 0;
 }
 
+/**
+ * What the operating system has decided about the camera. macOS hands over a stream that reports
+ * itself live and then never sends a frame, so without this the window cannot tell a blocked
+ * camera from a dark one and ends up blaming the hardware.
+ */
+let cameraAccess: CameraAccess = 'unknown';
+
+function accessBlocked(): boolean {
+  return cameraAccess === 'denied' || cameraAccess === 'undecided' || cameraAccess === 'asking';
+}
+
+const ACCESS_TEXT: Record<string, string> = {
+  asking: 'Waiting for you to allow camera access.',
+  denied:
+    window.electroscope.platform === 'darwin'
+      ? 'macOS is not letting Electroscope use the camera, so the picture stays dark. Allow it under Privacy & Security > Camera.'
+      : 'Windows is not letting Electroscope use the camera, so the picture stays dark. Allow camera access for desktop apps.',
+  undecided:
+    'macOS never asked whether Electroscope may use the camera, so it hands over a stream with no frames in it. ' +
+    'Allow it under Privacy & Security > Camera, then reopen the camera.',
+};
+
 
 /** Counts down to the next automatic reconnect, so "it retries" is something you can watch. */
 let nextRetryAt = 0;
@@ -302,11 +325,15 @@ function renderHud(): void {
   live.lastChild!.textContent = viewer.frozen ? 'FROZEN' : signal ? 'LIVE' : 'NO SIGNAL';
   // Shown exactly when the picture is on screen but nothing is arriving in it.
   const noSignal = $('no-signal');
+  const blocked = accessBlocked();
   noSignal.hidden = signal || !showingFrame();
-  noSignal.querySelector('.spinner')!.classList.toggle('stopped', session.gaveUp);
-  noSignal.querySelector('span:last-child')!.textContent = session.gaveUp
-    ? 'This camera opened but has never sent a frame. Check its cable and light, try another resolution, or pick a different camera.'
-    : 'Connected, but this camera has not sent a frame yet. Check its light and the focus ring.';
+  noSignal.querySelector('.spinner')!.classList.toggle('stopped', session.gaveUp || (blocked && cameraAccess !== 'asking'));
+  $('no-signal-text').textContent = blocked
+    ? ACCESS_TEXT[cameraAccess]!
+    : session.gaveUp
+      ? 'This camera opened but has never sent a frame. Check its cable and light, try another resolution, or pick a different camera.'
+      : 'Connected, but this camera has not sent a frame yet. Check its light and the focus ring.';
+  $('no-signal-action').hidden = !blocked || cameraAccess === 'asking';
   const zoom = $('hud-zoom');
   zoom.hidden = viewer.zoom <= 1.001;
   zoom.textContent = `${Math.round(viewer.zoom * 100)}%`;
@@ -1064,6 +1091,9 @@ async function main(): Promise<void> {
   });
 
   setInterval(() => {
+    // Reopening a camera the operating system has blocked changes nothing, and the panel is
+    // already saying what would.
+    if (accessBlocked()) return;
     nextRetryAt = Date.now() + 3000;
     retryAttempt = session.retries + 1;
     void session.retryIfStuck();
@@ -1079,6 +1109,18 @@ async function main(): Promise<void> {
     if (activity.length) renderActivity();
     if (clients.length) renderAgents();
   }, 15_000);
+
+  cameraAccess = await api.getCameraAccess().catch(() => 'unknown' as CameraAccess);
+  $('no-signal-action').addEventListener('click', () => void api.openCameraSettings());
+  api.onCameraAccess((access) => {
+    const wasBlocked = accessBlocked();
+    cameraAccess = access;
+    renderAll();
+    // A stream opened before the grant stays silent forever, so it has to be opened again.
+    if (wasBlocked && access === 'granted' && session.wanted) {
+      void session.open(session.wanted).then(renderAll, () => undefined);
+    }
+  });
 
   renderAll();
   await session.init(settings.lastCameraId);

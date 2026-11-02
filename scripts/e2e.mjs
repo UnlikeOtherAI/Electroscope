@@ -443,6 +443,36 @@ await step('requests from a foreign Origin or Host are refused', async () => {
   assert.equal(code, 403);
 });
 
+await step('a camera the operating system blocks is named as that, not as a dead cable', async () => {
+  const tell = async (access) => {
+    await app.evaluate(({ BrowserWindow }, a) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('camera:access:update', a);
+    }, access);
+    await page.waitForTimeout(150);
+    return page.evaluate(() => ({
+      text: document.getElementById('no-signal-text').textContent,
+      action: document.getElementById('no-signal-action').hidden === false,
+    }));
+  };
+
+  const denied = await tell('denied');
+  assert.match(denied.text, /not letting Electroscope use the camera/i);
+  assert.ok(denied.action, 'a blocked camera offers the settings pane');
+
+  const undecided = await tell('undecided');
+  assert.match(undecided.text, /never asked/i);
+  assert.ok(undecided.action, 'an unasked camera offers the settings pane too');
+  assert.notEqual(undecided.text, denied.text);
+
+  const asking = await tell('asking');
+  assert.match(asking.text, /allow camera access/i);
+  assert.ok(!asking.action, 'nothing to click while the dialog is still up');
+
+  const granted = await tell('granted');
+  assert.match(granted.text, /has not sent a frame yet|never sent a frame/i);
+  assert.ok(!granted.action, 'a granted camera is a hardware question again');
+});
+
 await client.close();
 await page.waitForTimeout(300);
 await page.screenshot({ path: join(outDir, 'app-final.png') });

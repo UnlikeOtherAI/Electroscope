@@ -5,6 +5,8 @@ export const IPC = {
   patchSettings: 'settings:patch',
   getServerInfo: 'server:info',
   getClients: 'clients:get',
+  getCameraAccess: 'camera:access:get',
+  openCameraSettings: 'camera:access:open-settings',
   savePhoto: 'photo:save',
   openPhotos: 'photo:open-folder',
   rendererReady: 'renderer:ready',
@@ -15,5 +17,6 @@ export const IPC = {
   settingsChanged: 'settings:changed',
   clientsChanged: 'clients:changed',
   activity: 'activity:event',
+  cameraAccess: 'camera:access:update',
   menu: 'menu:action',
 } as const;

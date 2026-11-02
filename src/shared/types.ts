@@ -117,6 +117,15 @@ export interface ViewState {
   frozen: boolean;
 }
 
+/**
+ * Whether the operating system lets Electroscope use a camera at all.
+ *
+ * `asking` means a permission dialog is on screen; `undecided` means macOS refused to ask, which
+ * only happens to builds without a stable code identity; `unknown` means the platform has no way
+ * to tell us in advance (Windows, Linux), where a blocked camera surfaces as an open failure.
+ */
+export type CameraAccess = 'granted' | 'denied' | 'asking' | 'undecided' | 'unknown';
+
 export interface CameraState {
   active: CameraInfo | null;
   cameras: CameraInfo[];

@@ -14,7 +14,7 @@
   "main": "dist/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "start": "npm run build && electron .",
+    "start": "npm run build && node scripts/start.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && node scripts/e2e.mjs",

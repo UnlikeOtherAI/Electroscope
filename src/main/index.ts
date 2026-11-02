@@ -2,7 +2,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, nativeTheme, screen, session, shell } from 'electron';
 import { IPC } from '../shared/ipc.js';
-import type { ActivityEvent, ClientInfo, ServerInfo, Settings, WindowBounds } from '../shared/types.js';
+import type { ActivityEvent, CameraAccess, ClientInfo, ServerInfo, Settings, WindowBounds } from '../shared/types.js';
 import { RendererBridge, type CommandResult } from './bridge.js';
 import { CaptureStore } from './captures.js';
 import { AppHub } from './hub.js';
@@ -10,6 +10,7 @@ import { buildMenu } from './menu.js';
 import { startMcpHttp, type McpHttp } from './mcp/http.js';
 import { createMcpServer } from './mcp/tools.js';
 import { lanAddresses } from './net.js';
+import { cameraAccessNow, openCameraSettings, requestCameraAccess } from './permissions.js';
 import { SettingsStore } from './store.js';
 
 const isMac = process.platform === 'darwin';
@@ -37,6 +38,7 @@ let photos: CaptureStore;
 let http: McpHttp | null = null;
 let serverInfo: ServerInfo = { running: false, port: 0, url: '', addresses: [], hostname: '', network: true };
 let clients: ClientInfo[] = [];
+let cameraAccess: CameraAccess = 'unknown';
 
 const bridge = new RendererBridge((envelope) => {
   if (!win || win.isDestroyed()) return false;
@@ -60,6 +62,25 @@ function publishClients(list: ClientInfo[]): void {
 
 function publishActivity(event: ActivityEvent): void {
   toRenderer(IPC.activity, event);
+}
+
+function publishCameraAccess(next: CameraAccess): void {
+  cameraAccess = next;
+  toRenderer(IPC.cameraAccess, cameraAccess);
+}
+
+/**
+ * Asks macOS for the camera without making the window wait on the dialog: a human who leaves the
+ * prompt sitting there should still get an app, and the window says what it is waiting for.
+ */
+function askForCameraInBackground(): void {
+  const current = cameraAccessNow();
+  if (current !== 'undecided') {
+    cameraAccess = current;
+    return;
+  }
+  cameraAccess = 'asking';
+  void requestCameraAccess().then(publishCameraAccess);
 }
 
 async function startServer(preferredPort: number, network: boolean): Promise<void> {
@@ -209,6 +230,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.patchSettings, (_e, patch: Partial<Settings>) => patchSettings(patch));
   ipcMain.handle(IPC.getServerInfo, () => serverInfo);
   ipcMain.handle(IPC.getClients, () => clients);
+  ipcMain.handle(IPC.getCameraAccess, () => cameraAccess);
+  ipcMain.handle(IPC.openCameraSettings, () => openCameraSettings());
   ipcMain.handle(IPC.savePhoto, (_e, data: Uint8Array, mimeType: string) => photos.save(data, mimeType, 'photo'));
   ipcMain.handle(IPC.openPhotos, async () => {
     await shell.openPath(photos.dir);
@@ -245,6 +268,7 @@ if (!app.requestSingleInstanceLock()) {
     });
 
     registerIpc();
+    askForCameraInBackground();
     buildMenu({
       send: (action) => toRenderer(IPC.menu, { action }),
       openPhotos: () => void shell.openPath(photos.dir),

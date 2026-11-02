@@ -19,7 +19,7 @@ Electroscope connects your USB microscope to an agent that supports **MCP**, inc
 
 Instead of “the little component on the left,” your agent can circle the component, put a crosshair on a test point, or draw an arrow to the pin it wants you to probe. You can draw back to show exactly where you measured. You handle the probes and measurements; Electroscope makes the visual conversation precise.
 
-![Electroscope on Windows, showing a real circuit board with example circles, arrows, crosshairs, and labels](docs/screenshot.png)
+![Electroscope showing a real circuit board with example circles, arrows, crosshairs, and labels, and the connected agent listed beside it](docs/screenshot.png)
 
 *Example marks on a real microscope image. Both you and the agent can add annotations to the same view.*
 
@@ -32,7 +32,7 @@ Instead of “the little component on the left,” your agent can circle the com
 - **See what the agent is doing.** Connected agents are listed by name, and a running feed shows what each one did, with a thumbnail of the frames it took.
 - **Work across your bench.** Run the microscope on one computer and connect an agent from another computer on the same trusted network.
 
-![Electroscope on macOS, zoomed into a circuit board with a grid and crosshair](docs/images/microscope-zoom.png)
+![Electroscope zoomed into a circuit board with a grid and crosshair, in the light theme](docs/images/microscope-zoom.png)
 
 *Zoom into the detail you are discussing. The agent can capture that same region without losing the original camera pixels.*
 

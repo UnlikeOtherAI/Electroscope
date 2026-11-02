@@ -54,3 +54,6 @@ Focus on these microscopes is mechanical: turn the ring. The live focus meter in
 is there for exactly that — turn until it peaks.
 
 [spec]: https://w3c.github.io/mediacapture-image/
+
+A camera that opens and then sends nothing at all is a different problem: see
+[Camera permission on macOS](camera-permission.md).
