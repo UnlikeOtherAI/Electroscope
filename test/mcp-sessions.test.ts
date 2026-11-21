@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { request, type ClientRequest, type IncomingMessage } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -10,17 +10,18 @@ const GRACE = 150;
 let http: McpHttp;
 let announced: string[][] = [];
 
-beforeEach(async () => {
+async function start(presenceLeaseMs?: number) {
   announced = [];
   http = await startMcpHttp({
     port: 0,
     host: '127.0.0.1',
     version: 'test',
     streamGraceMs: GRACE,
+    presenceLeaseMs,
     createServer: () => new McpServer({ name: 'electroscope', version: 'test' }),
     onClientsChanged: (list) => announced.push(list.map((c) => c.name)),
   });
-});
+}
 
 afterEach(async () => {
   await http.close();
@@ -90,6 +91,7 @@ async function openStream(sid: string): Promise<{ req: ClientRequest; res: Incom
 }
 
 it('forgets an agent that walks away without saying so', async () => {
+  await start();
   // The SDK's client closes its transport locally and never sends a DELETE, which is exactly
   // the case that used to leave a ghost in the window for half an hour.
   const client = new Client({ name: 'quiet-leaver', version: '1.0.0' });
@@ -107,6 +109,7 @@ it('forgets an agent that walks away without saying so', async () => {
 });
 
 it('keeps an agent that loses its stream and comes straight back', async () => {
+  await start();
   const sid = await initialize();
   const first = await openStream(sid);
   expect(names()).toEqual(['raw-agent']);
@@ -121,6 +124,7 @@ it('keeps an agent that loses its stream and comes straight back', async () => {
 });
 
 it('keeps an agent that never opens a stream at all', async () => {
+  await start();
   // A POST-only client is legitimate; nothing about it says it has gone.
   await initialize();
   await sleep(GRACE * 3);
@@ -128,6 +132,7 @@ it('keeps an agent that never opens a stream at all', async () => {
 });
 
 it('does not evict an agent when a second stream is refused', async () => {
+  await start();
   const sid = await initialize();
   const real = await openStream(sid);
   const refused = await openStream(sid);
@@ -139,6 +144,7 @@ it('does not evict an agent when a second stream is refused', async () => {
 });
 
 it('still removes an agent that says goodbye properly', async () => {
+  await start();
   const sid = await initialize();
   await openStream(sid);
   const status = await new Promise<number>((resolve, reject) => {
@@ -154,4 +160,34 @@ it('still removes an agent that says goodbye properly', async () => {
   });
   expect(status).toBeLessThan(300);
   expect(names()).toEqual([]);
+});
+
+it.each(['POST only', 'open stream'])('expires and renews presence with %s', async (mode) => {
+  const lease = 1200;
+  await start(lease);
+  const sid = await initialize();
+  if (mode === 'open stream') await openStream(sid);
+  const health = async () => (await fetch(new URL('/health', http.url))).json();
+  const ping = () => fetch(http.url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-session-id': sid,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
+  });
+
+  await sleep(lease * 0.6);
+  expect((await ping()).status).toBe(200);
+  await sleep(lease * 0.6);
+  expect(names()).toEqual(['raw-agent']);
+  await until(() => names().length === 0);
+  expect(names()).toEqual([]);
+  expect(announced.at(-1)).toEqual([]);
+  expect(await health()).toMatchObject({ clients: 0 });
+
+  expect((await ping()).status).toBe(200);
+  expect(announced.at(-1)).toEqual(['raw-agent']);
+  expect(await health()).toMatchObject({ clients: 1 });
 });

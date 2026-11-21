@@ -18,6 +18,8 @@ export interface McpHttpOptions {
   /** Called once per agent session; the ClientInfo is live and gains its id once the session starts. */
   createServer: (client: ClientInfo) => McpServer;
   onClientsChanged?: (clients: ClientInfo[]) => void;
+  /** How long the roster lists a client after its last request. */
+  presenceLeaseMs?: number;
   /** Sessions idle for longer than this are dropped. */
   sessionTtlMs?: number;
   /** How long a session may keep its place after its event stream drops, to allow a reconnect. */
@@ -28,6 +30,7 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   info: ClientInfo;
+  presence?: NodeJS.Timeout;
   /** Set while the agent's event stream is gone and we are waiting to see if it comes back. */
   gone?: NodeJS.Timeout;
 }
@@ -102,14 +105,17 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
   const own = osHostname().toLowerCase();
   const names = new Set([own, `${own}.local`, ...(opts.names ?? []).map((n) => n.toLowerCase())]);
   const ttl = opts.sessionTtlMs ?? 30 * 60_000;
+  const lease = opts.presenceLeaseMs ?? 3 * 60_000;
   const grace = opts.streamGraceMs ?? 10_000;
   const sessions = new Map<string, Session>();
 
-  const emit = () => opts.onClientsChanged?.([...sessions.values()].map((s) => s.info));
+  const clients = () => [...sessions.values()].filter((s) => s.presence).map((s) => s.info);
+  const emit = () => opts.onClientsChanged?.(clients());
 
   const drop = (id: string) => {
     const s = sessions.get(id);
     if (!s) return;
+    clearTimeout(s.presence);
     clearTimeout(s.gone);
     sessions.delete(id);
     void s.server.close().catch(() => undefined);
@@ -121,6 +127,16 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
     session.info.lastSeen = new Date().toISOString();
     clearTimeout(session.gone);
     session.gone = undefined;
+    if (session.presence) {
+      session.presence.refresh();
+      return;
+    }
+    session.presence = setTimeout(() => {
+      session.presence = undefined;
+      emit();
+    }, lease);
+    session.presence.unref();
+    emit();
   };
 
   /**
@@ -156,7 +172,7 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
     const url = new URL(req.url ?? '/', 'http://electroscope');
 
     if (url.pathname === '/health') {
-      return sendJson(res, 200, { name: 'electroscope', version: opts.version, ok: true, clients: sessions.size });
+      return sendJson(res, 200, { name: 'electroscope', version: opts.version, ok: true, clients: clients().length });
     }
     if (url.pathname !== '/mcp') {
       return sendJson(res, 404, { error: 'Not found. The MCP endpoint is /mcp' });
@@ -172,7 +188,7 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
       } catch (e) {
         return rpcError(res, 400, -32700, (e as Error).message);
       }
-      let session = sid ? sessions.get(sid) : undefined;
+      const session = sid ? sessions.get(sid) : undefined;
       if (!session) {
         if (sid || !isInitializeRequest(body)) {
           return rpcError(res, sid ? 404 : 400, -32000, sid ? 'Unknown session' : 'No session: send initialize first');
@@ -191,18 +207,17 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
             info.id = id;
-            sessions.set(id, { transport, server, info });
-            emit();
+            const initialized = { transport, server, info };
+            sessions.set(id, initialized);
+            seen(initialized);
           },
         });
         transport.onclose = () => {
           if (info.id) drop(info.id);
         };
         await server.connect(transport);
-        session = { transport, server, info };
         try {
-          seen(session);
-          await session.transport.handleRequest(req, res, body);
+          await transport.handleRequest(req, res, body);
         } catch (e) {
           // The session id is only assigned once initialize succeeds; without it `drop` cannot
           // find this server later, so close it here rather than leak it for the app's lifetime.
@@ -220,8 +235,10 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
     if (req.method === 'GET' || req.method === 'DELETE') {
       const session = sid ? sessions.get(sid) : undefined;
       if (!session) return rpcError(res, sid ? 404 : 400, -32000, 'Unknown or missing session');
-      seen(session);
-      if (req.method === 'GET') watchEventStream(session, res);
+      if (req.method === 'GET') {
+        seen(session);
+        watchEventStream(session, res);
+      }
       await session.transport.handleRequest(req, res);
       if (req.method === 'DELETE' && sid) drop(sid);
       return;
@@ -249,7 +266,7 @@ export async function startMcpHttp(opts: McpHttpOptions): Promise<McpHttp> {
   return {
     port,
     url: `http://127.0.0.1:${port}/mcp`,
-    clients: () => [...sessions.values()].map((s) => s.info),
+    clients,
     close: async () => {
       clearInterval(sweeper);
       for (const id of [...sessions.keys()]) drop(id);
