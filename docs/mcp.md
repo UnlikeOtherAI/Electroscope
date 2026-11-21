@@ -28,10 +28,11 @@ locally — so Electroscope also watches the server-to-client event stream: when
 not come back within ten seconds, the agent is dropped. A reconnect inside that window keeps the
 session, and so does any other request.
 
-An agent that uses neither — no `DELETE`, no event stream — cannot be detected leaving. It keeps
-its session until it has been idle for 30 minutes, and the window stops counting it as watching
-after 90 seconds of silence: it is listed as idle, with when it was last heard from, rather than
-as a second pair of eyes on the board.
+Each session request renews the agent's place in the window. After 90 seconds of silence, the
+window shows the agent as idle. After three minutes, it removes the agent from the list and the
+`/health` client count, even if an event stream is still open. A client that wants to remain
+visible while waiting can send an MCP `ping` once a minute. A later request restores the entry
+using the same session ID until the server cleans up the session after 30 minutes of inactivity.
 
 ## Coordinates
 
